@@ -1,0 +1,24 @@
+Registro de cambios para módulo de Tiendas (temporal, para copiar al proyecto real)
+---------------------------------------------------------------------------
+- routes/web.php: rutas de desarrollo sin autenticación:
+    - GET /dev/stores (hub) -> vista stores/stores.blade.php
+    - GET /dev/stores/create (alta) -> vista stores/create.blade.php
+    - GET /dev/stores/list (listado) -> vista stores/list.blade.php
+    - GET /dev/stores/template -> descarga storage/app/templates/stores.xlsx como plantilla-tiendas.xlsx
+    - POST /dev/stores/upload -> procesa Excel y crea/actualiza tiendas
+
+- resources/views/stores/stores.blade.php: hub en estilo claro, dos tarjetas (Lista de Tiendas / Crear Tienda).
+- resources/views/stores/list.blade.php: estilo claro; filtros/búsqueda y acciones Ver / Editar (próximo); sin botón de crear.
+- resources/views/stores/create.blade.php: estilo claro; sección de carga masiva (descargar plantilla y subir Excel funcional) y formulario manual.
+
+- Migración: database/migrations/2025_11_23_000000_create_stores_table.php (id_pdv, nro_documento, nombre_punto, nombre_cliente, categoria, ruta, celular, municipio, barrio, direccion, correo_electronico, timestamps, índices).
+- Modelo: app/Domain/Store/Models/Store.php (fillable de las columnas).
+- Seeder demo: database/seeders/StoreSeeder.php (dos tiendas ejemplo).
+- Importador Excel: app/Domain/Store/Imports/StoreImport.php (usa maatwebsite/excel; WithHeadingRow; updateOrCreate por id_pdv).
+- routes/web.php carga modelo Store en /dev/stores/list (si la tabla no existe, muestra vacío).
+
+Para poblar y ver datos:
+1. docker-compose exec app php artisan migrate
+2. docker-compose exec app php artisan db:seed --class=StoreSeeder
+
+Nota: Vistas y rutas son temporales, sin autenticación; falta conectar lógica real y luego mover a Filament con permisos.

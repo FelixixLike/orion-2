@@ -1,0 +1,16 @@
+includes:
+    - ./vendor/larastan/larastan/extension.neon
+
+parameters:
+    paths:
+        - app
+        - config
+        - database
+        - routes
+
+    # Rule level (0-9)
+    level: 5
+
+    excludePaths:
+        - ./*/*/FileToIgnore.php
+

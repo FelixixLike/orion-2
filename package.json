@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "lint": "biome check resources/js/",
+    "lint:fix": "biome check resources/js/ --write",
+    "format:php": "docker compose exec app ./vendor/bin/pint",
+    "format:php:test": "docker compose exec app ./vendor/bin/pint --test",
+    "format:php:cs": "docker compose exec app ./vendor/bin/php-cs-fixer fix",
+    "format:php:cs:test": "docker compose exec app ./vendor/bin/php-cs-fixer fix --dry-run --diff",
+    "format:blade": "find resources/views -name '*.blade.php' -exec blade-formatter {} \\;",
+    "format:all": "npm run format:php && npm run format:blade && npm run lint:fix",
+    "docker:build": "docker compose up -d --build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:clear": "docker compose down -v && docker rm -f $(docker ps -aq) 2>/dev/null; docker system prune -a --volumes -f && rm -rf storage/framework/cache/* storage/framework/sessions/* storage/framework/views/* bootstrap/cache/* storage/logs/*.log 2>/dev/null; echo 'Todo limpiado'"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.0",
+    "rollup": "^4.52.5",
+    "@tailwindcss/vite": "^4.1.16",
+    "@types/node": "^20.19.25",
+    "axios": "^1.11.0",
+    "concurrently": "^9.0.1",
+    "laravel-vite-plugin": "^2.0.0",
+    "tailwindcss": "^4.1.16",
+    "vite": "^7.0.7"
+  },
+  "dependencies": {
+    "@hotwired/turbo": "^8.0.4",
+    "laravel-echo": "^2.2.6",
+    "pusher-js": "^8.4.0"
+  }
+}

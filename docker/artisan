@@ -1,0 +1,5 @@
+#!/bin/bash
+# Wrapper para ejecutar comandos artisan con el usuario correcto (www-data)
+# Uso: ./docker/artisan make:migration nombre_migracion
+
+docker compose exec app gosu www-data php artisan "$@"

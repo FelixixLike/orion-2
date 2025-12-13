@@ -1,0 +1,83 @@
+@import 'tailwindcss';
+
+@font-face {
+    font-family: 'Montserrat';
+    src: url('../fonts/Montserrat-Regular.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: 'Montserrat-SemiBold';
+    src: url('../fonts/Montserrat-SemiBold.ttf') format('truetype');
+    font-weight: 600;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: 'Montserrat-Bold';
+    src: url('../fonts/Montserrat-Bold.ttf') format('truetype');
+    font-weight: 700;
+    font-style: normal;
+}
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../../app/**/*.php';
+@source '../**/*.blade.php';
+@source '../**/*.js';
+
+@theme {
+    --font-sans: sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+    --font-montserrat: 'Montserrat', sans-serif;
+    --font-montserrat-bold: 'Montserrat-Bold', sans-serif;
+    --font-montserrat-semibold: 'Montserrat-SemiBold', sans-serif;
+
+    --color-background-primary: #840608;
+
+    --color-primary-900: #260707;
+    --color-primary-800: #340a0a;
+    --color-primary-700: #430e0d;
+    --color-primary-600: #52110f;
+    --color-primary-500: #5f1412;
+    --color-primary-400: #7c3a36;
+    --color-primary-300: #a86e6b;
+    --color-primary-200: #d5b4b1;
+    --color-primary-100: #f0dedd;
+
+    --color-secondary-500: #c6a568;
+    --color-secondary-400: #c9a961;
+    --color-secondary-300: #d6bd84;
+    --color-secondary-200: #e9d5a8;
+    --color-secondary-100: #f7efdf;
+}
+
+@layer utilities {
+    .autofill-fix {
+        transition-property: background-color, color;
+        transition-duration: 5000s;
+    }
+    .autofill-fix:-webkit-autofill,
+    .autofill-fix:-webkit-autofill:hover,
+    .autofill-fix:-webkit-autofill:focus {
+        -webkit-box-shadow: 0 0 0px 1000px color-mix(in srgb, var(--color-background-primary), black 30%) inset;
+        -webkit-text-fill-color: white;
+    }
+
+    /* Password toggle eye icon */
+    button.password-visible .eye-slash {
+        display: block;
+    }
+
+    /* Quitar flechitas de inputs tipo number */
+    input[type='number']::-webkit-inner-spin-button,
+    input[type='number']::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+
+    input[type='number'] {
+        -moz-appearance: textfield;
+        appearance: textfield;
+    }
+}
