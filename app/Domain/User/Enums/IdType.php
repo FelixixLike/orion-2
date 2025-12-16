@@ -1,4 +1,10 @@
-<?php declare(strict_types=1);
+<?php
+
+/*
+ * Copyright (c) 2025 Andrés Felipe Martínez González, Nelson Steven Reina Moreno, Gissel Tatiana Parrado Moreno.
+ * All rights reserved. See LICENSE.md for usage terms.
+ */
+declare(strict_types=1);
 
 namespace App\Domain\User\Enums;
 

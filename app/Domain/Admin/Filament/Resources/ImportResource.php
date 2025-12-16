@@ -1,6 +1,9 @@
 <?php
 
-
+/*
+ * Copyright (c) 2025 Andrés Felipe Martínez González, Nelson Steven Reina Moreno, Gissel Tatiana Parrado Moreno.
+ * All rights reserved. See LICENSE.md for usage terms.
+ */
 /**
  * @author Andrés Felipe Martínez González <felixix-like@outlook.es>
  * @copyright 2025 Derechos Reservados. Uso exclusivo bajo licencia privada.
