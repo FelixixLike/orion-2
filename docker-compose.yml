@@ -9,11 +9,11 @@ services:
     command:
       - "postgres"
       - "-c"
-      - "shared_buffers=256MB"
+      - "shared_buffers=1GB" 
       - "-c"
       - "max_locks_per_transaction=256"
       - "-c"
-      - "work_mem=32MB"
+      - "work_mem=64MB"
     ports:
       - "5433:5432"
     volumes:
@@ -25,7 +25,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0' 
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
 
   redis:
     image: redis:7-alpine
@@ -64,6 +71,7 @@ services:
       APP_URL: http://localhost:8000
       DEV_SERVE: "true"
       RUN_MIGRATIONS: "true"
+      QUEUE_CONNECTION: redis
     ports:
       - "8000:8000"
       - "9000:9000"
@@ -80,7 +88,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     command: /usr/local/bin/entrypoint.sh php-fpm
+    # Deploy configuration removed to allow full host resource usage
 
   nginx:
     image: nginx:alpine
@@ -116,6 +128,48 @@ services:
     ports:
       - "8080:8080"
     command: gosu www-data php artisan reverb:start --host=0.0.0.0 --port=8080
+
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USER_ID: ${USER_ID:-1000}
+        GROUP_ID: ${GROUP_ID:-1000}
+
+    restart: unless-stopped
+    working_dir: /var/www
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: orion
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QUEUE_CONNECTION: redis
+    volumes:
+      - ./:/var/www
+      - vendor_data:/var/www/vendor
+      - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    networks:
+      - orion
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
+    command: sh /var/www/start_workers.sh
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -q '[q]ueue:work' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # SIN LIMITES EN QUEUE (Usa lo del host)
 
 volumes:
   postgres_data:

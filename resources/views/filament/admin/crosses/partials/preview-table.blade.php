@@ -30,7 +30,7 @@
             <div class="text-center md:text-right w-full md:w-auto">
                 <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total a Liquidar</div>
                 <div class="text-lg font-bold text-primary-600 dark:text-primary-400 whitespace-nowrap">
-                    {{ Number::currency($this->previewTotalAmount, 'COP') }}
+                    {{ Number::currency($this->grandTotalAmount, 'COP') }}
                 </div>
             </div>
 
@@ -132,7 +132,7 @@
                                             </thead>
                                             <tbody
                                                 class="bg-white dark:bg-gray-900 divide-y divide-gray-100 dark:divide-gray-800">
-                                                @foreach($store['lines'] as $line)
+                                                @foreach($this->detailedLines as $line)
                                                     <tr>
                                                         <td class="px-3 py-2">
                                                             <div>{{ $line['iccid'] ?? 'Sin ICCID' }}</div>

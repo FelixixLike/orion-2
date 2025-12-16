@@ -103,6 +103,41 @@
                     <p class="text-xs mt-1 text-slate-500 dark:text-slate-400">{{ $rechargeRowsTotal }} registro(s)</p>
                 </div>
             </div>
+
+            @if (($summary['orphaned_recharges_count'] ?? 0) > 0)
+                <div class="mt-4 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg dark:bg-red-900/10 dark:border-red-600">
+                    <div class="flex">
+                        <div class="flex-shrink-0">
+                            <x-heroicon-o-exclamation-triangle class="h-5 w-5 text-red-500" />
+                        </div>
+                        <div class="ml-3">
+                            <h3 class="text-sm font-medium text-red-800 dark:text-red-200">
+                                Discrepancia en Recargas
+                            </h3>
+                            <div class="mt-2 text-sm text-red-700 dark:text-red-300">
+                                <p>
+                                    Hay <strong>{{ $summary['orphaned_recharges_count'] }}</strong> recargas por valor de
+                                    <strong>${{ number_format($summary['orphaned_recharges_amount'] ?? 0, 2, ',', '.') }}</strong>
+                                    correspondientes a líneas que <strong>NO están presentes en el reporte de Pagos
+                                        Claro</strong> de este mes.
+                                </p>
+                                <p class="mt-1">
+                                    Estas recargas variables <strong class="uppercase">no serán liquidadas</strong> ya que
+                                    no existe base del operador para calcular el residual.
+                                </p>
+                                <div class="mt-3 flex gap-3">
+                                    <x-filament::button wire:click="exportOrphans" color="danger" size="xs"
+                                        icon="heroicon-m-arrow-down-tray">
+                                        Descargar Discrepancias
+                                    </x-filament::button>
+
+                                    {{ $this->deleteOrphansAction }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            @endif
         @endif
 
         @if($hasSelectedPeriod)
@@ -112,7 +147,8 @@
                     class="px-4 py-4 border-b border-slate-100/70 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between dark:border-slate-800">
                     <div class="space-y-1">
                         <h3 class="text-base font-semibold text-slate-900 dark:text-white">Registros importados</h3>
-                        <p class="text-sm text-slate-500 dark:text-slate-400">Vista detallada de todos los campos entregados
+                        <p class="text-sm text-slate-500 dark:text-slate-400">Vista detallada de todos los campos
+                            entregados
                             por Claro. Usa el scroll horizontal para navegar por las 86+ columnas.</p>
                         @if($hasRows)
                             <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
@@ -133,7 +169,7 @@
                                 registros
                             </label>
                             <x-filament::button wire:click="export" icon="heroicon-o-arrow-down-tray" size="sm" color="primary">
-                                Exportar Excel
+                                Exportar CSV
                             </x-filament::button>
                         </div>
                     @endif
@@ -147,7 +183,8 @@
                                     @foreach($fullColumns as $column)
                                         <th
                                             class="border border-slate-300 dark:border-slate-700 px-3 py-2 bg-slate-100 dark:bg-slate-800 text-left text-xs font-semibold">
-                                            {{ $column['label'] }}</th>
+                                            {{ $column['label'] }}
+                                        </th>
                                     @endforeach
                                     <th
                                         class="border border-slate-300 dark:border-slate-700 px-3 py-2 bg-slate-100 dark:bg-slate-800 text-left text-xs font-semibold">
@@ -161,11 +198,12 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @forelse($displayRows as $row)
+                                @forelse($fullRows as $row)
                                     <tr>
                                         @foreach($fullColumns as $column)
                                             <td class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs">
-                                                {{ $row[$column['key']] ?? '' }}</td>
+                                                {{ $row[$column['key']] ?? '' }}
+                                            </td>
                                         @endforeach
                                         <td class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-semibold">
                                             ${{ number_format($row['total_pagado'] ?? 0, 2, ',', '.') }}</td>
@@ -188,6 +226,39 @@
                             </tbody>
                         </table>
                     </div>
+
+                    {{-- Pagination Controls --}}
+                    <div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700">
+                        <div class="flex flex-1 justify-between sm:hidden">
+                            <x-filament::button wire:click="previousPage" :disabled="$this->page <= 1" size="sm" color="gray">
+                                Anterior
+                            </x-filament::button>
+                            <x-filament::button wire:click="nextPage" :disabled="count($fullRows) < $currentPerPage" size="sm"
+                                color="gray">
+                                Siguiente
+                            </x-filament::button>
+                        </div>
+                        <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+                            <div>
+                                <p class="text-sm text-gray-700 dark:text-gray-300">
+                                    Página <span class="font-medium">{{ $this->page }}</span>
+                                </p>
+                            </div>
+                            <div>
+                                <nav class="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+                                    <x-filament::button wire:click="previousPage" :disabled="$this->page <= 1" size="sm"
+                                        color="gray" class="rounded-r-none">
+                                        Anterior
+                                    </x-filament::button>
+                                    <x-filament::button wire:click="nextPage" :disabled="count($fullRows) < $currentPerPage"
+                                        size="sm" color="gray" class="rounded-l-none">
+                                        Siguiente
+                                    </x-filament::button>
+                                </nav>
+                            </div>
+                        </div>
+                    </div>
+
                 @else
                     <div class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
                         No se cargaron Pagos Claro para este periodo. Usa la importación de Pagos Claro para ver registros.
@@ -200,31 +271,35 @@
                 <div
                     class="px-4 py-4 border-b border-slate-100/70 flex flex-col gap-4 md:flex-row md:items-center md:justify-between dark:border-slate-800">
                     <div>
-                        <h3 class="text-base font-semibold text-slate-900 dark:text-white">Recargas / Variables del periodo
+                        <h3 class="text-base font-semibold text-slate-900 dark:text-white">Recargas / Variables del
+                            periodo
                         </h3>
-                        <p class="text-sm text-slate-500 dark:text-slate-400">Estos valores alimentan el cálculo residual
+                        <p class="text-sm text-slate-500 dark:text-slate-400">Estos valores alimentan el cálculo
+                            residual
                             del tendero.</p>
                     </div>
-                
+
                     @if($rechargeRowsTotal > 0)
-                    <div class="flex flex-wrap items-center gap-3">
-                        <div class="text-sm text-slate-500 dark:text-slate-300 mr-2">
-                             Total: <span class="font-semibold text-slate-900 dark:text-slate-100">{{ $rechargeRowsTotal }}</span>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <div class="text-sm text-slate-500 dark:text-slate-300 mr-2">
+                                Total: <span
+                                    class="font-semibold text-slate-900 dark:text-slate-100">{{ $rechargeRowsTotal }}</span>
+                            </div>
+                            <label class="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
+                                Mostrar
+                                <select wire:model.live="rechargeRowsPerPage"
+                                    class="fi-input rounded-xl border-slate-200 bg-white px-3 py-1 text-slate-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
+                                    @foreach($perPageOptions as $option)
+                                        <option value="{{ $option }}">{{ $option }}</option>
+                                    @endforeach
+                                </select>
+                                registros
+                            </label>
+                            <x-filament::button wire:click="exportRecharges" icon="heroicon-o-arrow-down-tray" size="sm"
+                                color="success">
+                                Exportar CSV
+                            </x-filament::button>
                         </div>
-                        <label class="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
-                            Mostrar
-                            <select wire:model.live="rechargeRowsPerPage"
-                                class="fi-input rounded-xl border-slate-200 bg-white px-3 py-1 text-slate-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
-                                @foreach($perPageOptions as $option)
-                                    <option value="{{ $option }}">{{ $option }}</option>
-                                @endforeach
-                            </select>
-                            registros
-                        </label>
-                        <x-filament::button wire:click="exportRecharges" icon="heroicon-o-arrow-down-tray" size="sm" color="success">
-                            Exportar Excel
-                        </x-filament::button>
-                    </div>
                     @endif
                 </div>
 
@@ -234,23 +309,29 @@
                             <thead>
                                 <tr class="bg-slate-100 dark:bg-slate-800 text-xs font-semibold">
                                     <th class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-left">ICCID</th>
-                                    <th class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-left">Teléfono</th>
-                                    <th class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-left">Monto recarga
+                                    <th class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-left">Teléfono
                                     </th>
-                                    <th class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-left">Periodo</th>
+                                    <th class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-left">Monto
+                                        recarga
+                                    </th>
+                                    <th class="border border-slate-300 dark:border-slate-700 px-3 py-2 text-left">Periodo
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody>
                                 @foreach($displayRechargeRows as $row)
                                     <tr class="text-xs">
                                         <td class="border border-slate-300 dark:border-slate-700 px-3 py-2">
-                                            {{ $row['iccid'] ?? 'N/D' }}</td>
+                                            {{ $row['iccid'] ?? 'N/D' }}
+                                        </td>
                                         <td class="border border-slate-300 dark:border-slate-700 px-3 py-2">
-                                            {{ $row['phone_number'] ?? 'N/D' }}</td>
+                                            {{ $row['phone_number'] ?? 'N/D' }}
+                                        </td>
                                         <td class="border border-slate-300 dark:border-slate-700 px-3 py-2 font-semibold">
                                             ${{ number_format($row['recharge_amount'] ?? 0, 2, ',', '.') }}</td>
                                         <td class="border border-slate-300 dark:border-slate-700 px-3 py-2">
-                                            {{ $row['period_label'] ?? $row['period_date'] ?? 'N/D' }}</td>
+                                            {{ $row['period_label'] ?? $row['period_date'] ?? 'N/D' }}
+                                        </td>
                                     </tr>
                                 @endforeach
                             </tbody>
@@ -258,7 +339,8 @@
                     </div>
                 @else
                     <div class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
-                        No se cargaron recargas para este periodo. Usa la importación de Recargas / Variables para complementar
+                        No se cargaron recargas para este periodo. Usa la importación de Recargas / Variables para
+                        complementar
                         la consolidación.
                     </div>
                 @endif

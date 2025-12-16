@@ -223,11 +223,11 @@ class CreateImport extends CreateRecord
     private function dispatchImportJob(string $type, int $importId): void
     {
         match ($type) {
-            ImportType::OPERATOR_REPORT->value => ProcessOperatorReportImportJob::dispatchSync($importId),
-            ImportType::RECHARGE->value => ProcessRechargeImportJob::dispatchSync($importId),
-            ImportType::SALES_CONDITION->value => ProcessSalesConditionImportJob::dispatchSync($importId),
-            ImportType::STORE->value => ProcessStoreImportJob::dispatchSync($importId),
-            ImportType::REDEMPTION_PRODUCT->value => ProcessRedemptionProductImportJob::dispatchSync($importId),
+            ImportType::OPERATOR_REPORT->value => ProcessOperatorReportImportJob::dispatch($importId),
+            ImportType::RECHARGE->value => ProcessRechargeImportJob::dispatch($importId),
+            ImportType::SALES_CONDITION->value => ProcessSalesConditionImportJob::dispatch($importId),
+            ImportType::STORE->value => ProcessStoreImportJob::dispatch($importId),
+            ImportType::REDEMPTION_PRODUCT->value => ProcessRedemptionProductImportJob::dispatch($importId),
             default => null,
         };
     }

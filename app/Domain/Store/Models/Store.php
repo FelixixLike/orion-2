@@ -62,8 +62,8 @@ class Store extends Model
     protected function casts(): array
     {
         return [
-            'category' => StoreCategory::class,
-            'municipality' => Municipality::class,
+            // 'category' => StoreCategory::class, // REMOVED: Now dynamic string linked to Model
+            // 'municipality' => Municipality::class, // REMOVED: Now dynamic string linked to Model
             'status' => StoreStatus::class,
         ];
     }

@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 
 class PaymentHistoryPage extends Page
@@ -70,6 +71,8 @@ class PaymentHistoryPage extends Page
         return $user?->hasAnyRole(['super_admin', 'administrator'], 'admin') ?? false;
     }
 
+
+
     public function mount(): void
     {
         $this->fullColumns = OperatorReportSchema::columns();
@@ -113,33 +116,116 @@ class PaymentHistoryPage extends Page
             return null;
         }
 
-        // Ensure the dataset is current before exporting.
-        $this->loadData();
+        \App\Jobs\GeneratePaymentHistoryCsv::dispatch(auth()->id(), $this->selectedPeriod, 'full');
 
-        if (empty($this->fullRows)) {
-            return null;
-        }
+        \Filament\Notifications\Notification::make()
+            ->title('Exportación iniciada')
+            ->body('El archivo se está generando en segundo plano.')
+            ->success()
+            ->send();
 
-        $filename = 'historico-pagos-' . $this->selectedPeriod . '.xlsx';
-
-        return Excel::download(
-            new OperatorReportsHistoryExport($this->fullColumns, $this->fullRows),
-            $filename
-        );
+        return null;
     }
 
     public function exportRecharges()
     {
         if (empty($this->rechargeRows)) {
+            // Check if period selected effectively
+            if (empty($this->selectedPeriod))
+                return null;
+        }
+
+        \App\Jobs\GeneratePaymentHistoryCsv::dispatch(auth()->id(), $this->selectedPeriod, 'recharges');
+
+        \Filament\Notifications\Notification::make()
+            ->title('Exportación de Recargas iniciada')
+            ->body('El archivo se está generando en segundo plano.')
+            ->success()
+            ->send();
+
+        return null;
+    }
+
+    public function exportOrphans()
+    {
+        if (empty($this->selectedPeriod)) {
             return null;
         }
 
-        $filename = 'recargas-' . ($this->selectedPeriod ?? 'todos') . '.xlsx';
+        [$year, $month] = $this->parseSelectedPeriod();
+
+        if (!$year || !$month) {
+            return null;
+        }
+
+        // Obtener activeSimcardIds de la misma forma que en loadData.
+        // Nota: Esto reutiliza la lógica, pero idealmente deberíamos cachear o refactorizar si es muy pesado.
+        // Por ahora, repetimos la consulta para la exportación.
+
+        $activeSimcardIds = $this->buildReportQuery(false)->pluck('simcard_id')->filter()->unique();
+
+        $orphanedQuery = \App\Domain\Import\Models\Recharge::query()
+            ->where(function ($query) use ($year, $month) {
+                $query->where('period_label', $this->selectedPeriod)
+                    ->orWhere(function ($sub) use ($year, $month) {
+                        $sub->whereYear('period_date', $year)
+                            ->whereMonth('period_date', $month);
+                    });
+            })
+            ->whereNotIn('simcard_id', $activeSimcardIds)
+            ->with('simcard');
 
         return Excel::download(
-            new \App\Domain\Admin\Exports\RechargesHistoryExport($this->rechargeRows),
-            $filename
+            new \App\Domain\Admin\Exports\OrphanedRechargesExport($orphanedQuery->get()),
+            "recargas_huerfanas_{$this->selectedPeriod}.csv",
+            \Maatwebsite\Excel\Excel::CSV
         );
+    }
+
+    public function deleteOrphansAction(): \Filament\Actions\Action
+    {
+        return \Filament\Actions\Action::make('deleteOrphansAction')
+            ->label('Eliminar Definitivamente')
+            ->color('gray')
+            ->icon('heroicon-m-trash')
+            ->size('xs')
+            ->requiresConfirmation()
+            ->modalHeading('¿Eliminar recargas huérfanas?')
+            ->modalDescription('¿Estás seguro de que deseas eliminar estas recargas? Esta acción no se puede deshacer.')
+            ->modalSubmitActionLabel('Sí, eliminar')
+            ->action(fn() => $this->deleteOrphans());
+    }
+
+    public function deleteOrphans()
+    {
+        if (empty($this->selectedPeriod)) {
+            return;
+        }
+
+        // Crear registro de proceso en segundo plano
+        $process = \App\Domain\Admin\Models\BackgroundProcess::create([
+            'user_id' => auth()->id(),
+            'type' => 'delete_orphans',
+            'name' => "Eliminando recargas huérfanas ({$this->selectedPeriod})",
+            'total' => 0,
+            'progress' => 0,
+            'status' => 'pending',
+        ]);
+
+        // Despachar tarea en segundo plano para manejar alto volumen (50k+)
+        \App\Domain\Import\Jobs\DeleteOrphanedRechargesJob::dispatch(
+            $this->selectedPeriod,
+            auth()->id(),
+            $process->id
+        );
+
+        \Filament\Notifications\Notification::make()
+            ->title('Eliminación iniciada')
+            ->body("El proceso se está ejecutando en segundo plano. Puedes ver el progreso en la barra flotante.")
+            ->info()
+            ->send();
+
+        // No recargamos datos inmediatamente porque el job apenas inicia
     }
 
     private function loadPeriods(): void
@@ -174,13 +260,11 @@ class PaymentHistoryPage extends Page
             'imports_count' => $stat->imports_count,
         ])->keyBy('value');
 
-        $rechargePeriods = Import::query()
-            ->where('type', ImportType::RECHARGE->value)
-            ->where('status', ImportStatus::COMPLETED->value)
-            ->whereNotNull('period')
-            ->select('period')
+        $rechargePeriods = \App\Domain\Import\Models\Recharge::query()
+            ->select('period_label')
             ->distinct()
-            ->pluck('period')
+            ->whereNotNull('period_label')
+            ->pluck('period_label')
             ->filter()
             ->values();
 
@@ -201,11 +285,37 @@ class PaymentHistoryPage extends Page
             ->toArray();
     }
 
+    public bool $isPaginated = true; // Flag for view compatibility
+    public int $page = 1;
+
+    public function updatedPage(): void
+    {
+        $this->loadData();
+    }
+
+    public function nextPage(): void
+    {
+        $this->page++;
+        $this->loadData();
+    }
+
+    public function previousPage(): void
+    {
+        if ($this->page > 1) {
+            $this->page--;
+            $this->loadData();
+        }
+    }
+
     private function loadData(): void
     {
         $this->summary = [];
         $this->fullRows = [];
-        $this->fullRowsTotal = 0;
+        // Keep fullRowsTotal separate from count($fullRows) because we paginate
+        // But reset it here
+        if ($this->page < 1)
+            $this->page = 1;
+
         $this->rechargeRows = [];
         $this->rechargeRowsTotal = 0;
         $this->rechargeTotalAmount = 0.0;
@@ -216,51 +326,96 @@ class PaymentHistoryPage extends Page
 
         $this->loadRechargeData();
 
-        // CAMBIO: Mostrar siempre datos CRUDOS (is_consolidated = false) para que el usuario vea
-        // la totalidad de filas subidas (auditoría), incluyendo duplicados de múltiples cargas.
-        // La consolidación se usa internamente para liquidar, pero el histórico debe reflejar los inputs.
-        $reports = $this->buildReportQuery(false)->get();
+        // --- SUMMARY AGGREGATION (SQL Optimized) ---
+        $query = $this->buildReportQuery(false); // Base query for period
 
-        if ($reports->isEmpty()) {
+        // Check availability
+        $count = $query->count(); // Fast count (Laravel handles removing order by for count automatically)
+        if ($count === 0 && empty($this->rechargeRows)) {
             return;
         }
 
-        $this->hydrateRawPayload($reports);
+        $this->fullRowsTotal = $count;
 
-        $latestImport = $reports->map(fn(OperatorReport $r) => $r->import)->filter()->sortByDesc('created_at')->first();
-        $importsCount = $reports->pluck('import_id')->unique()->count();
+        // Calculate totals in database
+        // Fix: Remove order by before aggregating to avoid "must appear in GROUP BY" error
+        $aggregates = $query->reorder()->selectRaw('
+            SUM(commission_paid_80 + commission_paid_20) as total_paid,
+            SUM(recharge_amount) as total_recharge,
+            MAX(import_id) as max_import_id,
+            COUNT(DISTINCT import_id) as imports_count
+        ')->first();
 
-        $totalPaid = $reports->sum(fn(OperatorReport $r) => (float) ($r->commission_paid_80 ?? 0) + (float) ($r->commission_paid_20 ?? 0));
-        $totalCalculated = $reports->sum(function (OperatorReport $r) {
-            $percentage = $this->normalizePercentageValue($r->payment_percentage ?? 0);
-            $amount = (float) ($r->recharge_amount ?? 0);
-            return $amount * $percentage;
-        });
+        // Calculate 'calculated' amount directly in SQL to avoid hydrating 25k+ models
+        // Logic: IF percentage > 1 THEN percentage/100 ELSE percentage.
+        // Use raw query for speed.
+        $totalCalculated = $query->sum(DB::raw('recharge_amount * (CASE WHEN payment_percentage > 1 THEN payment_percentage / 100 ELSE payment_percentage END)'));
+
+        // Get latest import details
+        $latestImport = null;
+        if ($aggregates->max_import_id) {
+            $latestImport = Import::find($aggregates->max_import_id);
+        } elseif (!empty($this->rechargeRows)) {
+            $latestImport = Import::find($this->rechargeRows[0]['import_id'] ?? null);
+        }
 
         $this->summary = [
             'period' => $this->selectedPeriod,
             'import_id' => $latestImport?->id,
-            'imports_count' => $importsCount,
+            'imports_count' => $aggregates->imports_count ?? 1,
             'created_at' => $latestImport?->created_at?->format('Y-m-d H:i'),
-            'total_rows' => $reports->count(),
-            'total_paid' => $totalPaid,
+            'total_rows' => $count,
+            'total_paid' => (float) $aggregates->total_paid,
             'total_calculated' => $totalCalculated,
-            'difference' => $totalPaid - $totalCalculated,
-            'cutoff' => $this->summarizeCutoff($reports),
+            'difference' => ((float) $aggregates->total_paid) - $totalCalculated,
+            'cutoff' => 'N/A', // Optimization: skip complex cutoff summary unless needed
+            'orphaned_recharges_count' => 0,
+            'orphaned_recharges_amount' => 0.0,
         ];
 
+        // Orphans logic (kept same, optimized query exists elsewhere)
+        if ($this->selectedPeriod) {
+            [$year, $month] = $this->parseSelectedPeriod();
+            if ($year && $month) {
+                // Re-build query for simcard checking to avoid scope issues or side effects
+                $simCheckQuery = $this->buildReportQuery(false);
+
+                // Optimization: Pluck simcard is fast enough for 25k ints
+                $activeSimcardIds = $simCheckQuery->pluck('simcard_id')->filter()->unique();
+
+                $orphanedQuery = \App\Domain\Import\Models\Recharge::query()
+                    ->where('period_label', $this->selectedPeriod)
+                    ->whereNotIn('simcard_id', $activeSimcardIds);
+
+                $this->summary['orphaned_recharges_amount'] = (float) $orphanedQuery->sum('recharge_amount');
+                $this->summary['orphaned_recharges_count'] = (int) $orphanedQuery->count();
+            }
+        }
+
+        // --- PAGINATION FOR ROWS ---
+        // Only load the current page slice
+        $reportsPage = $query->select('*') // Need all for detail view? Or specific columns?
+            ->forPage($this->page, $this->fullRowsPerPage) // Pagination happens in DB
+            ->get();
+
+        $this->hydrateRawPayload($reportsPage); // Only hydrate 5-25 items! Secure & Fast.
+
         $columns = $this->fullColumns;
-        $this->fullRows = $reports->map(function (OperatorReport $report) use ($columns) {
+        $this->fullRows = $reportsPage->map(function ($report) use ($columns) {
             $payload = $report->raw_payload ?? [];
             $row = [];
-
             foreach ($columns as $column) {
-                $key = $column['key'];
-                $row[$key] = $payload[$key] ?? null;
+                $row[$column['key']] = $payload[$column['key']] ?? null;
             }
 
+            // Fallback values from DB if payload empty
+            if (empty($row['phone_number']))
+                $row['phone_number'] = $report->phone_number;
+            if (empty($row['iccid']))
+                $row['iccid'] = $report->iccid;
+
             $paid = (float) ($report->commission_paid_80 ?? 0) + (float) ($report->commission_paid_20 ?? 0);
-            $calc = $this->calculateFromPayload($payload, $report);
+            $calc = $this->calculateExpectedAmount($report->recharge_amount, $report->payment_percentage);
 
             $row['total_pagado'] = $paid;
             $row['calc_monto_porcentaje'] = $calc;
@@ -269,9 +424,17 @@ class PaymentHistoryPage extends Page
 
             return $row;
         })->toArray();
-
-        $this->fullRowsTotal = count($this->fullRows);
     }
+
+    private function calculateExpectedAmount($amount, $percentage): float
+    {
+        $amountValue = (float) $amount;
+        $percentageValue = $this->normalizePercentageValue($percentage);
+        return $amountValue * $percentageValue;
+    }
+
+    // Keep hydrateRawPayload but it will only process the small collection passed to it
+
 
     private function hydrateRawPayload(Collection $reports): void
     {
@@ -472,33 +635,44 @@ class PaymentHistoryPage extends Page
 
         $periodLabel = $this->selectedPeriod;
 
-        $rechargesQuery = Recharge::query()->with('simcard');
+        $baseQuery = Recharge::query();
 
         if ($periodLabel || ($year && $month)) {
-            $rechargesQuery->where(function ($query) use ($periodLabel, $year, $month) {
+            $baseQuery->where(function ($query) use ($periodLabel, $year, $month) {
                 if ($periodLabel) {
                     $query->where('period_label', $periodLabel);
                 }
 
                 if ($year && $month) {
                     $query->orWhere(function ($sub) use ($year, $month) {
-                        $sub->whereYear('period_date', $year)
-                            ->whereMonth('period_date', $month);
+                        $sub->where('period_year', $year)
+                            ->where('period_month', $month);
                     });
                 }
             });
         }
 
-        $recharges = $rechargesQuery
-            ->orderByDesc('period_year')
-            ->orderByDesc('period_month')
-            ->orderByDesc('period_date')
-            ->orderBy('id')
-            ->get();
+        // 1. Calculate Count and Total directly in SQL (Fast)
+        $this->rechargeRowsTotal = $baseQuery->count();
+        $this->rechargeTotalAmount = (float) $baseQuery->sum('recharge_amount');
 
-        if ($recharges->isEmpty()) {
+        if ($this->rechargeRowsTotal === 0) {
             return;
         }
+
+        // 2. Fetch only the current page slice (Fast)
+        // Note: Using page 1 logic unless we want separate pagination for recharges.
+        // Assuming user just wants to see "some" recharges or we use $this->page if shared?
+        // Usually recharges table has its own pagination or is just a list.
+        // Given existing code uses $this->rechargeRowsPerPage, lets use that.
+        // But $this->page is shared with main table? If so, paging main table pages recharges too.
+        // Let's assume shared pagination for now as per current structure.
+
+        $recharges = $baseQuery
+            ->with(['simcard']) // Eager load simcard relation
+            ->orderByDesc('id') // Determinisic order
+            ->forPage($this->page, $this->rechargeRowsPerPage)
+            ->get();
 
         $this->rechargeRows = $recharges->map(function (Recharge $recharge) {
             $label = $recharge->period_label;
@@ -518,9 +692,6 @@ class PaymentHistoryPage extends Page
                 'import_id' => $recharge->import_id,
             ];
         })->toArray();
-
-        $this->rechargeRowsTotal = count($this->rechargeRows);
-        $this->rechargeTotalAmount = $recharges->sum(fn(Recharge $recharge) => (float) ($recharge->recharge_amount ?? 0));
     }
 
     /**

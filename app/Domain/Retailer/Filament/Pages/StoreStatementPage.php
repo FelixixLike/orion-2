@@ -103,7 +103,7 @@ class StoreStatementPage extends Page
 
         $this->loadPeriodOptions();
 
-        if (! empty($this->periodOptions) && ! in_array($this->period, $this->periodOptions, true)) {
+        if (!empty($this->periodOptions) && !in_array($this->period, $this->periodOptions, true)) {
             $this->period = $this->periodOptions[0];
         }
 
@@ -228,7 +228,7 @@ class StoreStatementPage extends Page
 
     private function loadPeriodOptions(): void
     {
-        if (! $this->storeId) {
+        if (!$this->storeId) {
             $this->periodOptions = [];
             return;
         }

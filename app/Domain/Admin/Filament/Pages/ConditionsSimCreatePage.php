@@ -6,7 +6,6 @@ use App\Domain\Import\Enums\ImportStatus;
 use App\Domain\Import\Enums\ImportType;
 use App\Domain\Import\Models\Import;
 use App\Domain\Import\Models\SalesCondition;
-use App\Domain\Import\Services\IccidCleanerService;
 use App\Domain\Import\Services\SimcardService;
 use App\Domain\Store\Models\Store;
 use Filament\Forms\Components\DatePicker;
@@ -21,6 +20,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
+use App\Domain\Admin\Filament\Resources\ImportResource;
 
 class ConditionsSimCreatePage extends Page implements HasForms
 {
@@ -267,25 +267,16 @@ class ConditionsSimCreatePage extends Page implements HasForms
             $importer = new \App\Domain\Import\Imports\SalesConditionImport($import->id);
             $importer->import($filePath, 'local');
 
-            $stats = $importer->getStats();
-            $errors = $importer->getErrors();
-
-            $import->update([
-                'processed_rows' => $stats['total_processed'] ?? 0,
-                'successful_rows' => ($stats['inserted'] ?? 0) + ($stats['updated'] ?? 0),
-                'error_rows' => $stats['skipped'] ?? 0,
-                'errors' => $errors,
-                'status' => \App\Domain\Import\Enums\ImportStatus::COMPLETED,
-            ]);
-
             Notification::make()
-                ->title('Carga completada')
+                ->title('Importación iniciada')
+                ->body('El proceso se ha iniciado en segundo plano. Los datos se irán actualizando automáticamente.')
                 ->success()
-                ->body("Procesados: {$stats['total_processed']} | Insertados: {$stats['inserted']} | Actualizados: {$stats['updated']}")
                 ->send();
 
             $this->bulkForm->fill();
             $this->bulkData = [];
+
+            $this->redirect(ImportResource::getUrl('view', ['record' => $import->id]));
 
         } catch (\Exception $e) {
             $import->update([
@@ -294,10 +285,13 @@ class ConditionsSimCreatePage extends Page implements HasForms
             ]);
 
             Notification::make()
-                ->title('Error en la carga')
+                ->title('Error al iniciar')
                 ->danger()
                 ->body($e->getMessage())
                 ->send();
+
+            // Redirigir de todos modos para ver el error
+            $this->redirect(ImportResource::getUrl('view', ['record' => $import->id]));
         }
     }
 }

@@ -25,7 +25,7 @@
 
                         <x-filament::button wire:click="exportToExcel" color="success"
                             icon="heroicon-o-arrow-down-tray">
-                            Exportar a Excel
+                            Exportar a CSV
                         </x-filament::button>
                     </div>
                 </div>

@@ -42,7 +42,7 @@ class ImportForm
                             ->required()
                             ->multiple()
                             ->maxFiles(50)
-                            ->maxSize(102400) // 100MB
+                            ->maxSize(512000) // 500MB
                             ->directory('imports')
                             ->visibility('private')
                             ->helperText('Puedes subir archivos grandes en partes. Los registros se agregarán sin sobrescribir datos existentes.'),

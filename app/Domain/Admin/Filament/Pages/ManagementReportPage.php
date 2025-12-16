@@ -52,7 +52,19 @@ class ManagementReportPage extends Page
         }
     }
 
-    // ... (updatedPeriod y refreshReport quedan igual)
+    public function updatedPeriod(): void
+    {
+        $this->recomputeReport();
+    }
+
+    public function refreshReport(): void
+    {
+        $this->recomputeReport();
+        \Filament\Notifications\Notification::make()
+            ->title('Reporte actualizado')
+            ->success()
+            ->send();
+    }
 
     private function recomputeReport(): void
     {
@@ -64,6 +76,39 @@ class ManagementReportPage extends Page
 
         $this->summary = $this->buildSummary($this->period);
         $this->storeBreakdown = $this->buildStoreBreakdown($this->period);
+    }
+
+    public function exportOrphans()
+    {
+        if (!$this->period) {
+            return;
+        }
+
+        [$year, $month] = explode('-', $this->period);
+        $year = (int) $year;
+        $month = (int) $month;
+
+        $activeSimcardIds = OperatorReport::query()
+            ->where('period_year', $year)
+            ->where('period_month', $month)
+            ->distinct()
+            ->pluck('simcard_id');
+
+        $orphanedQuery = \App\Domain\Import\Models\Recharge::query()
+            ->where(function ($query) use ($year, $month) {
+                $query->where('period_label', $this->period)
+                    ->orWhere(function ($sub) use ($year, $month) {
+                        $sub->whereYear('period_date', $year)
+                            ->whereMonth('period_date', $month);
+                    });
+            })
+            ->whereNotIn('simcard_id', $activeSimcardIds)
+            ->with('simcard');
+
+        return \Maatwebsite\Excel\Facades\Excel::download(
+            new \App\Domain\Admin\Exports\OrphanedRechargesExport($orphanedQuery->get()),
+            "recargas_huerfanas_{$this->period}.xlsx"
+        );
     }
 
     public function getAvailablePeriodsOptions(): array

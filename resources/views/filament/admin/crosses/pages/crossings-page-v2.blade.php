@@ -4,7 +4,7 @@
 @endphp
 
 <x-filament-panels::page>
-    <div class="space-y-4">
+    <div class="space-y-4" wire:init="loadSummaries">
         <div class="space-y-1">
             <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">
                 Cruce de pagos Claro vs Movilco vs tenderos
@@ -18,9 +18,15 @@
             {{ $this->form }}
         </x-filament::card>
 
+
         @if (!$hasSummaries)
             <x-filament::card>
-                <p class="text-sm text-gray-600 dark:text-gray-300">No hay datos para el periodo seleccionado.</p>
+                <div wire:loading wire:target="loadSummaries" class="flex items-center justify-center py-8">
+                    <x-filament::loading-indicator class="w-10 h-10 text-primary-600" />
+                    <span class="ml-3 text-sm text-gray-600 dark:text-gray-300">Cargando datos...</span>
+                </div>
+                <p wire:loading.remove wire:target="loadSummaries" class="text-sm text-gray-600 dark:text-gray-300">No hay
+                    datos para el periodo seleccionado.</p>
             </x-filament::card>
         @endif
 
@@ -30,6 +36,27 @@
                     class="absolute inset-0 z-10 bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm flex items-center justify-center">
                     <x-filament::loading-indicator class="w-10 h-10 text-primary-600" />
                 </div>
+
+                @if($calculating)
+                    <div wire:poll.2s="checkPreviewProgress"
+                        class="absolute inset-0 z-20 bg-white/90 dark:bg-gray-900/90 backdrop-blur-sm flex flex-col gap-4 items-center justify-center p-6">
+                        <x-filament::loading-indicator class="w-16 h-16 text-primary-600" />
+                        <div class="w-full max-w-md space-y-2">
+                            <div class="flex justify-between text-sm font-bold text-gray-700 dark:text-gray-200">
+                                <span>Calculando liquidación...</span>
+                                <span>{{ $calculationProgress }}%</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-4 dark:bg-gray-700 overflow-hidden shadow-inner">
+                                <div class="bg-primary-600 h-full rounded-full transition-all duration-500 ease-out shadow-lg"
+                                    style="width: {{ $calculationProgress }}%"></div>
+                            </div>
+                            <p class="text-xs text-center text-gray-500 dark:text-gray-400">
+                                Procesando pagos y recargas para {{ $previewPeriod ?? 'el periodo' }}...<br>
+                                Por favor no cierres esta pestaña.
+                            </p>
+                        </div>
+                    </div>
+                @endif
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-800 text-sm">
                         <thead class="bg-gray-50 dark:bg-gray-900/40">
@@ -138,7 +165,8 @@
                 </div>
 
                 {{-- Contenido de la Tabla de Previsualización --}}
-                <div class="mt-4">
+                {{-- Contenido de la Tabla de Previsualización --}}
+                <div class="mt-4 relative">
                     @include('filament.admin.crosses.partials.preview-table')
                 </div>
 
@@ -159,7 +187,7 @@
                 </x-slot>
             </x-filament::modal>
 
-            @if(!empty($previewPeriod) && count($previewStores) === 0)
+            @if(!empty($previewPeriod) && count($previewStores) === 0 && !$calculating)
                 <x-filament::card>
                     <div class="flex items-center justify-between">
                         <div>

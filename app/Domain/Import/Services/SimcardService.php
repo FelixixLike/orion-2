@@ -15,53 +15,39 @@ class SimcardService
      */
     public static function findOrCreateByIccid(string $iccid, ?string $phoneNumber = null): Simcard
     {
-        try {
-            $simcard = Simcard::firstOrCreate(
-                ['iccid' => $iccid],
-                ['phone_number' => $phoneNumber]
-            );
+        // 1. Intentar buscar primero
+        $simcard = Simcard::where('iccid', $iccid)->first();
 
+        if (!$simcard) {
+            // 2. Insertar con ON CONFLICT DO NOTHING para evitar excepción de transacciones
+            try {
+                // Envolvemos en transacción (Savepoint) por si la sentencia de bajo nivel falla (ej: tipo de dato),
+                // para que Postgres no aborte la transacción padre.
+                DB::transaction(function () use ($iccid, $phoneNumber) {
+                    DB::statement("
+                        INSERT INTO simcards (iccid, phone_number, created_at, updated_at)
+                        VALUES (?, ?, NOW(), NOW())
+                        ON CONFLICT (iccid) DO NOTHING
+                    ", [$iccid, $phoneNumber]);
+                });
+            } catch (\Throwable $e) {
+                // Si falla el insert por algo que no sea unique (raro), logueamos pero intentamos buscar
+                Log::warning('SimcardService: Raw insert failed', ['error' => $e->getMessage()]);
+            }
+
+            // 3. Buscar de nuevo (ahora debe existir)
+            $simcard = Simcard::where('iccid', $iccid)->first();
+        }
+
+        if ($simcard) {
             // Actualizar phone_number si no existe pero se proporciona
-            /** @var string|null $currentPhone */
-            $currentPhone = $simcard->phone_number;
-            if ($currentPhone === null && $phoneNumber !== null) {
+            if ($simcard->phone_number === null && $phoneNumber !== null) {
                 $simcard->update(['phone_number' => $phoneNumber]);
             }
-
             return $simcard;
-        } catch (\Throwable $e) {
-            // Manejar violación de constraint único (race condition)
-            // Código 23505 = unique_violation en PostgreSQL
-            $isUniqueViolation = $e->getCode() == 23505 || 
-                                 str_contains($e->getMessage(), '23505') || 
-                                 str_contains($e->getMessage(), 'unique constraint') ||
-                                 str_contains($e->getMessage(), 'duplicate key value');
-
-            if ($isUniqueViolation) {
-                // Si es violación única, hacer SELECT directo
-                // Esto evita corromper la transacción principal
-                Log::debug('SimcardService: Unique violation caught for ICCID, performing direct SELECT', [
-                    'iccid' => $iccid,
-                    'phone_number' => $phoneNumber
-                ]);
-                
-                $simcard = Simcard::where('iccid', $iccid)->first();
-                
-                if ($simcard) {
-                    // Actualizar phone_number si no existe pero se proporciona
-                    /** @var string|null $currentPhone */
-                    $currentPhone = $simcard->phone_number;
-                    if ($currentPhone === null && $phoneNumber !== null) {
-                        $simcard->update(['phone_number' => $phoneNumber]);
-                    }
-                    
-                    return $simcard;
-                }
-            }
-            
-            // Si no es violación única o no se encontró el registro, re-lanzar
-            throw $e;
         }
+
+        throw new \Exception("No se pudo encontrar ni crear la Simcard con ICCID: $iccid");
     }
 
     /**
@@ -69,51 +55,36 @@ class SimcardService
      */
     public static function findOrCreateByPhoneNumber(string $phoneNumber, ?string $iccid = null): Simcard
     {
-        try {
-            $simcard = Simcard::firstOrCreate(
-                ['phone_number' => $phoneNumber],
-                ['iccid' => $iccid]
-            );
+        // 1. Intentar buscar primero
+        $simcard = Simcard::where('phone_number', $phoneNumber)->first();
 
+        if (!$simcard) {
+            // 2. Insertar con ON CONFLICT DO NOTHING
+            try {
+                DB::transaction(function () use ($phoneNumber, $iccid) {
+                    DB::statement("
+                        INSERT INTO simcards (phone_number, iccid, created_at, updated_at)
+                        VALUES (?, ?, NOW(), NOW())
+                        ON CONFLICT (phone_number) DO NOTHING
+                    ", [$phoneNumber, $iccid]);
+                });
+            } catch (\Throwable $e) {
+                Log::warning('SimcardService: Raw insert failed (phone)', ['error' => $e->getMessage()]);
+            }
+
+            // 3. Buscar de nuevo
+            $simcard = Simcard::where('phone_number', $phoneNumber)->first();
+        }
+
+        if ($simcard) {
             // Actualizar iccid si no existe pero se proporciona
-            /** @var string|null $currentIccid */
-            $currentIccid = $simcard->iccid;
-            if ($currentIccid === null && $iccid !== null) {
+            if ($simcard->iccid === null && $iccid !== null) {
                 $simcard->update(['iccid' => $iccid]);
             }
-
             return $simcard;
-        } catch (\Throwable $e) {
-            // Manejar violación de constraint único (race condition)
-            $isUniqueViolation = $e->getCode() == 23505 || 
-                                 str_contains($e->getMessage(), '23505') || 
-                                 str_contains($e->getMessage(), 'unique constraint') ||
-                                 str_contains($e->getMessage(), 'duplicate key value');
-
-            if ($isUniqueViolation) {
-                // Si es violación única, hacer SELECT directo
-                Log::debug('SimcardService: Unique violation caught for phone number, performing direct SELECT', [
-                    'phone_number' => $phoneNumber,
-                    'iccid' => $iccid
-                ]);
-                
-                $simcard = Simcard::where('phone_number', $phoneNumber)->first();
-                
-                if ($simcard) {
-                    // Actualizar iccid si no existe pero se proporciona
-                    /** @var string|null $currentIccid */
-                    $currentIccid = $simcard->iccid;
-                    if ($currentIccid === null && $iccid !== null) {
-                        $simcard->update(['iccid' => $iccid]);
-                    }
-                    
-                    return $simcard;
-                }
-            }
-            
-            // Si no es violación única o no se encontró el registro, re-lanzar
-            throw $e;
         }
+
+        throw new \Exception("No se pudo encontrar ni crear la Simcard con Teléfono: $phoneNumber");
     }
 
     /**

@@ -41,18 +41,18 @@ class DataNormalizerService
     public static function normalizeKeys(array $data): array
     {
         $normalized = [];
-        
+
         foreach ($data as $key => $value) {
             if (is_numeric($key) && $value === null) {
                 continue;
             }
-            
-            $normalizedKey = strtolower(trim((string)$key));
-            
+
+            $normalizedKey = strtolower(trim((string) $key));
+
             if (isset(self::$columnMapping[$normalizedKey])) {
                 $normalizedKey = self::$columnMapping[$normalizedKey];
             }
-            
+
             $normalized[$normalizedKey] = $value;
         }
 
@@ -70,11 +70,11 @@ class DataNormalizerService
         }
 
         if (is_int($value)) {
-            $cleaned = (string)$value;
+            $cleaned = (string) $value;
         } elseif (is_float($value)) {
             $cleaned = number_format($value, 0, '', '');
         } else {
-            $cleaned = trim((string)$value);
+            $cleaned = trim((string) $value);
         }
 
         return $cleaned === '' ? null : $cleaned;
@@ -105,14 +105,56 @@ class DataNormalizerService
             return null;
         }
 
-        $cleaned = trim((string)$value);
-        $cleaned = str_replace(',', '.', $cleaned);
-        $cleaned = str_replace(' ', '', $cleaned);
+        // Si ya es numérico (float/int nativo de PHP/Excel), retornarlo directo
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
 
-        if ($cleaned === '' || !is_numeric($cleaned)) {
+        $string = trim((string) $value);
+
+        // Remover espacios y caracteres de moneda comunes
+        $string = str_replace(['$', ' ', 'COP', 'USD'], '', $string);
+
+        // Detección heurística de formato
+        $hasDot = str_contains($string, '.');
+        $hasComma = str_contains($string, ',');
+
+        if ($hasDot && $hasComma) {
+            // Caso complejo: tiene ambos. Decidir cuál es el decimal por la posición.
+            $lastDotPos = strrpos($string, '.');
+            $lastCommaPos = strrpos($string, ',');
+
+            if ($lastDotPos < $lastCommaPos) {
+                // Formato Europeo/Latino: 1.000,50
+                // Eliminar puntos (miles) y cambiar coma por punto (decimal)
+                $string = str_replace('.', '', $string);
+                $string = str_replace(',', '.', $string);
+            } else {
+                // Formato Inglés: 1,000.50
+                // Eliminar comas (miles)
+                $string = str_replace(',', '', $string);
+            }
+        } elseif ($hasComma) {
+            // Solo tiene comas: 10,50 o 1,000 (ambiguo, pero en contexto latino soler ser decimal)
+            // Asumiremos que es decimal si hay solo una coma. Si hay varias ("1,000,000"), son miles.
+            if (substr_count($string, ',') > 1) {
+                $string = str_replace(',', '', $string);
+            } else {
+                $string = str_replace(',', '.', $string);
+            }
+        } elseif ($hasDot) {
+            // Solo tiene puntos: 10.50 o 1.000 (ambiguo)
+            // Si hay más de un punto, seguro son miles: 1.000.000 -> 1000000
+            if (substr_count($string, '.') > 1) {
+                $string = str_replace('.', '', $string);
+            }
+            // Si hay solo uno (10.50), PHP lo maneja bien nativamente.
+        }
+
+        if ($string === '' || !is_numeric($string)) {
             return null;
         }
 
-        return (float)$cleaned;
+        return (float) $string;
     }
 }

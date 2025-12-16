@@ -23,6 +23,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Registrar componente Livewire manualmente para evitar problemas de ruta
+        \Livewire\Livewire::component('background-process-widget', \App\Domain\Admin\Livewire\BackgroundProcessWidget::class);
+
         // Registrar notification de login
         \Illuminate\Support\Facades\Event::listen(
             \Illuminate\Auth\Events\Login::class,

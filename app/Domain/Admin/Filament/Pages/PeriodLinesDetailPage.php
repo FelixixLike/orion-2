@@ -76,7 +76,7 @@ class PeriodLinesDetailPage extends Page
         $request = request();
         $page = $request->integer('page', 1);
 
-        if (! $this->period) {
+        if (!$this->period) {
             return [
                 'paginator' => new LengthAwarePaginator([], 0, $perPage, $page, [
                     'path' => $request->url(),
@@ -144,7 +144,7 @@ class PeriodLinesDetailPage extends Page
     {
         $lines = collect();
 
-        if (! $this->period) {
+        if (!$this->period) {
             return $lines;
         }
 
@@ -160,22 +160,21 @@ class PeriodLinesDetailPage extends Page
 
     public function export()
     {
-        $all = [];
+        $source = null;
 
         if ($this->usingPreview && $this->period) {
-            $all = $this->previewLines()
+            $source = $this->previewLines()
                 ->map(fn($line) => $this->mapPreviewLine($line))
                 ->all();
         } else {
-            $all = $this->baseLinesQuery()
-                ->get()
-                ->map(fn(LiquidationItem $item) => $this->mapItem($item))
-                ->all();
+            // Optimización: Pasamos el QUERY BUILDER DIRECTAMENTE
+            // Esto permite que Laravel Excel use cursores y no cargue todo en RAM.
+            $source = $this->baseLinesQuery();
         }
 
         $filename = 'detalle-periodo-' . ($this->period ?? 'sin-periodo') . '.xlsx';
 
-        return \Maatwebsite\Excel\Facades\Excel::download(new \App\Domain\Admin\Exports\PeriodLinesExport($all), $filename);
+        return \Maatwebsite\Excel\Facades\Excel::download(new \App\Domain\Admin\Exports\PeriodLinesExport($source), $filename);
     }
 
     private function mapItem(LiquidationItem $item): array

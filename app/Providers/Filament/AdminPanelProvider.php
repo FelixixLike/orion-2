@@ -69,6 +69,11 @@ class AdminPanelProvider extends PanelProvider
                     }
                 </style>'
             )
+            // Widget Personalizado Eliminado por Solicitud del Usuario (Prefiere notificaciones nativas)
+            // ->renderHook(
+            //     'panels::body.end',
+            //     fn() => \Illuminate\Support\Facades\Blade::render("@livewire('background-process-widget')")
+            // )
             ->discoverResources(in: app_path('Domain/Admin/Filament/Resources'), for: 'App\Domain\Admin\Filament\Resources')
             ->resources([
                 RedemptionResource::class,

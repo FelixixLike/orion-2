@@ -39,35 +39,45 @@ class LiquidationCalculationService
      *     lines: array<int, array<string,mixed>>
      * }
      */
-    public function calculateForPeriod(string $period): array
+    public function calculateForPeriod(string $period, ?callable $onProgress = null, array $limitReportIds = []): array
     {
         [$year, $month] = $this->parsePeriod($period);
 
-        $reports = OperatorReport::query()
-            ->with('simcard')
-            ->where('is_consolidated', true)
-            ->where('period_year', $year)
-            ->where('period_month', $month)
-            ->whereNull('liquidation_item_id')
-            ->get();
+        // REVERTIDO A LOGICA STANDARD (LEGACY) POR PETICION DE USUARIO
+        // Se mantiene eager loading para rendimiento, pero volvemos a iterar en PHP.
 
-        if ($reports->isEmpty()) {
-            // Compatibilidad: si no hay consolidado, usar cortes individuales del mes.
-            $reports = OperatorReport::query()
-                ->with('simcard')
-                ->whereYear('cutoff_date', $year)
-                ->whereMonth('cutoff_date', $month)
-                ->whereNull('liquidation_item_id')
-                ->get();
+        $query = OperatorReport::query()
+            ->with(['simcard']) // Cargar relación
+            ->where('is_consolidated', true)
+            ->where(function ($q) use ($year, $month, $period) {
+                $q->where(function ($sub) use ($year, $month) {
+                    $sub->where('period_year', $year)->where('period_month', $month);
+                })
+                    ->orWhere('period_label', $period)
+                    ->orWhere(function ($sub) use ($year, $month) {
+                        $sub->whereNull('period_year')
+                            ->whereYear('cutoff_date', $year)
+                            ->whereMonth('cutoff_date', $month);
+                    });
+            })
+            ->whereNull('liquidation_item_id');
+
+        if (!empty($limitReportIds)) {
+            $query->whereIn('id', $limitReportIds);
         }
+
+        $reports = $query->get();
 
         if ($reports->isEmpty()) {
             return ['stores' => [], 'lines' => []];
         }
 
-        // Obtener la última condición disponible para cada simcard (sin filtro de periodo)
-        $latestConditions = $this->latestConditionsBySimcard();
+        // Obtener la última condición disponible para cada simcard (optimizado)
+        // Usamos la colección en memoria para sacar IDs
+        $simIds = $reports->pluck('simcard_id')->filter()->unique();
+        $latestConditions = $this->latestConditionsBySimcard(); // Método existente
 
+        // Cargar Recargas - Lógica original
         $recharges = Recharge::query()
             ->where(function ($query) use ($period, $year, $month) {
                 $query->where('period_label', $period)
@@ -78,62 +88,80 @@ class LiquidationCalculationService
             })
             ->get();
 
-        $rechargeBySimcard = $recharges->groupBy('simcard_id')->map->sum('recharge_amount');
+        $rechargeBySimcard = $recharges->whereNotNull('simcard_id')->groupBy('simcard_id')->map->sum('recharge_amount');
 
-        // Normalizador de teléfonos (últimos 10 dígitos)
+        // Normalizador
         $normalizePhone = fn($p) => substr(preg_replace('/\D/', '', (string) $p), -10);
-
         $rechargeByPhone = $recharges->groupBy(fn($r) => $normalizePhone($r->phone_number))
             ->map->sum('recharge_amount');
 
-        $storesByIdpos = Store::query()->pluck('id', 'idpos');
+        // Mapa de tiendas
+        $storesByIdpos = Store::pluck('id', 'idpos')->toArray();
+
+        // Mapa de Simcards por Teléfono para reportes sin vinculo directo
+        $simIdsByPhone = [];
+        $reportsWithoutSim = $reports->whereNull('simcard_id')->whereNotNull('phone_number');
+
+        if ($reportsWithoutSim->isNotEmpty()) {
+            $phonesToResolve = $reportsWithoutSim->pluck('phone_number')->filter()->unique()->values();
+            if ($phonesToResolve->isNotEmpty()) {
+                $simIdsByPhone = Simcard::whereIn('phone_number', $phonesToResolve)
+                    ->pluck('id', 'phone_number')
+                    ->toArray();
+            }
+        }
 
         $lines = [];
         $stores = [];
 
+        $totalReports = $reports->count();
+        $processedCount = 0;
+
         foreach ($reports as $report) {
+            $processedCount++;
+            if ($onProgress && $processedCount % 500 === 0) {
+                $onProgress($processedCount, $totalReports);
+            }
             $simcard = $report->simcard;
             $simcardId = $simcard?->id;
-            $iccid = $simcard?->iccid;
+
             $phone = $report->phone_number ?? $simcard?->phone_number;
-            $normPhone = $normalizePhone($phone);
 
-            // Usar la última condición disponible para este simcard
+            // Si no hay simcard, intentamos recuperar por el ID que tenga el reporte
+            if (!$simcardId) {
+                $simcardId = $report->simcard_id;
+            }
+
+            // Fallback: Buscar por teléfono si aún no tenemos simcardId
+            if (!$simcardId && $phone && isset($simIdsByPhone[$phone])) {
+                $simcardId = $simIdsByPhone[$phone];
+            }
+
+            $phone = $report->phone_number ?? $simcard?->phone_number;
+            $iccid = $simcard?->iccid ?? $report->iccid;
+
             $condition = $latestConditions->get($simcardId);
-            // Si no hay condicion, se liquida en 0 residual.
-
             $idpos = $condition?->idpos;
             $storeId = $idpos ? ($storesByIdpos[$idpos] ?? null) : null;
 
+            // Logica de montos
             $rechargeAmount = (float) ($rechargeBySimcard->get($simcardId, 0.0) ?? 0.0);
-            if ($rechargeAmount === 0.0 && $normPhone) {
-                // Intentar buscar por teléfono normalizado
-                $rechargeAmount = (float) ($rechargeByPhone->get($normPhone, 0.0) ?? 0.0);
+            if ($rechargeAmount === 0.0 && $phone) {
+                $rechargeAmount = (float) ($recharges->where('phone_number', $phone)->sum('recharge_amount'));
+            }
+            if ($rechargeAmount === 0.0 && $phone) {
+                $norm = $normalizePhone($phone);
+                $rechargeAmount = (float) ($rechargeByPhone->get($norm, 0.0) ?? 0.0);
             }
 
-            $paymentPercentage = $report->payment_percentage ?? 0;
-            if ($paymentPercentage > 1) {
-                $paymentPercentage = $paymentPercentage / 100;
-            }
-
-            $montoCarga = (float) ($report->recharge_amount ?? 0); // Revertido a recharge_amount para evitar totales globales
+            $montoCarga = (float) ($report->recharge_amount ?? 0);
             $totalCommission = $report->total_commission ?? (($report->commission_paid_80 ?? 0) + ($report->commission_paid_20 ?? 0));
-            $operatorTotalRecharge = $report->total_recharge_per_period; // Mantenemos el dato original para referencia
+            $operatorTotalRecharge = $report->total_recharge_per_period;
 
-            // Calculo REAL según usuario: (Ventas - Recargas Movilco) = Base Real
-            $baseReal = max($montoCarga - $rechargeAmount, 0); // 12000 - 2000 = 10000
-            $discountBase = $baseReal; // Corregido: Definir variable para uso en el array
-
-            $residualPercent = $condition?->commission_percentage ?? 0; // 7%
-            $valorSim = $condition?->sale_price ?? null;
-
-            // Pago Residual = Base Real * % Residual
-            $pagoResidual = $baseReal * ($residualPercent / 100); // 10000 * 0.07 = 700
-
-            // Variables legacy para compatibilidad si se necesitan, pero la lógica principal es la de arriba
-            $paymentPercentage = $report->payment_percentage ?? 0;
-            $commissionAfterDiscount = $totalCommission; // Ya no se usa para el calculo principal
-            $transferPercent = 0.0; // Ya no aplica el calculo inverso complejo
+            // Base Real
+            $baseReal = max($montoCarga - $rechargeAmount, 0);
+            $residualPercent = $condition?->commission_percentage ?? 0;
+            $pagoResidual = $baseReal * ($residualPercent / 100);
 
             $line = [
                 'operator_report_id' => $report->id,
@@ -149,20 +177,21 @@ class LiquidationCalculationService
                 'custcode' => $report->custcode,
                 'operator_amount' => $operatorTotalRecharge,
                 'operator_total_recharge' => $operatorTotalRecharge,
-                'recharge_amount' => $rechargeAmount, // Recarga Movilco
+                'recharge_amount' => $rechargeAmount,
                 'recharge_discount' => $rechargeAmount,
-                'commission_after_discount' => $pagoResidual, // Ajustado para reflejar el valor ganado
+                'commission_after_discount' => $pagoResidual,
                 'base_liquidation' => $baseReal,
-                'base_liquidation_final' => $baseReal, // Base sobre la cual se calcula (10000)
+                'base_liquidation_final' => $baseReal,
                 'residual_percentage' => $residualPercent,
-                'traslado_percentage' => $residualPercent, // Simplificación: Traslado es el mismo residual
-                'payment_percentage' => $paymentPercentage,
-                'valor_sim' => $valorSim,
+                'traslado_percentage' => $residualPercent,
+                'payment_percentage' => $report->payment_percentage,
+                'valor_sim' => $condition?->sale_price,
                 'pago_residual' => $pagoResidual,
 
                 'movilco_recharge_amount' => $rechargeAmount,
-                'discount_total_period' => $discountBase,
-                'discount_residual' => $rechargeAmount,
+                'discount_total_period' => $baseReal, // Alias
+                'discount_residual' => $rechargeAmount, // Alias
+
                 'period' => $period,
                 'period_date' => $report->cutoff_date,
                 'period_year' => $year,
@@ -172,19 +201,20 @@ class LiquidationCalculationService
 
             $lines[] = $line;
 
-            if ($storeId) {
-                if (!isset($stores[$storeId])) {
-                    $stores[$storeId] = [
-                        'store_id' => $storeId,
-                        'idpos' => $idpos,
-                        'total' => 0.0,
-                        'lines' => [],
-                    ];
-                }
+            // Agrupar líneas huérfanas en una tienda virtual ID -1 para no perder el dinero
+            $targetStoreId = $storeId ?: -1;
 
-                $stores[$storeId]['total'] += $pagoResidual;
-                $stores[$storeId]['lines'][] = $line;
+            if (!isset($stores[$targetStoreId])) {
+                $stores[$targetStoreId] = [
+                    'store_id' => $targetStoreId,
+                    'idpos' => $idpos ?: 'SIN-VINCULO',
+                    'name' => $storeId ? 'Store' : 'SIN TIENDA ASIGNADA', // Se rellenará bien en el Job Finalizer si es real
+                    'total' => 0.0,
+                    'lines' => [],
+                ];
             }
+            $stores[$targetStoreId]['total'] += $pagoResidual;
+            $stores[$targetStoreId]['lines'][] = $line;
         }
 
         return ['stores' => $stores, 'lines' => $lines];
@@ -501,15 +531,23 @@ class LiquidationCalculationService
     /**
      * Obtiene la última condición comercial disponible para cada simcard.
      * Las condiciones son permanentes por ICCID, no por periodo.
+     * OPTIMIZADO: Usa window functions de PostgreSQL para evitar cargar 23k+ registros en memoria.
      */
     private function latestConditionsBySimcard(): Collection
     {
         return SalesCondition::query()
-            ->orderByDesc('period_year')
-            ->orderByDesc('period_month')
-            ->orderByDesc('created_at')
+            ->fromSub(function ($query) {
+                $query->selectRaw('
+                    *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY simcard_id 
+                        ORDER BY period_year DESC, period_month DESC, created_at DESC
+                    ) as rn
+                ')
+                    ->from('sales_conditions');
+            }, 'ranked')
+            ->where('rn', 1)
             ->get()
-            ->unique('simcard_id')
             ->keyBy('simcard_id');
     }
 

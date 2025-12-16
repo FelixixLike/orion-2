@@ -27,7 +27,12 @@ class OperatorReportsHistoryExport implements FromCollection, WithHeadings, Shou
             $record = [];
 
             foreach ($this->columns as $column) {
-                $record[] = $row[$column['key']] ?? null;
+                $val = $row[$column['key']] ?? null;
+                // Forzar formato texto para ICCID
+                if ($column['key'] === 'iccid' && $val) {
+                    // $val = ' ' . $val; // Evitamos espacio en CSV
+                }
+                $record[] = $val;
             }
 
             $record[] = $row['total_pagado'] ?? null;
@@ -41,7 +46,7 @@ class OperatorReportsHistoryExport implements FromCollection, WithHeadings, Shou
     public function headings(): array
     {
         $baseHeadings = array_map(
-            fn (array $column) => $column['label'],
+            fn(array $column) => $column['label'],
             $this->columns
         );
 

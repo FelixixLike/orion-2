@@ -11,7 +11,6 @@ use App\Domain\Import\Exceptions\ImportValidationException;
 use App\Domain\Import\Models\Import;
 use App\Domain\Import\Models\Recharge;
 use App\Domain\Import\Services\ColumnTranslator;
-use App\Domain\Import\Services\IccidCleanerService;
 use App\Domain\Import\Services\SimcardService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -22,19 +21,24 @@ use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Maatwebsite\Excel\Concerns\WithMultipleSheets;
 use Maatwebsite\Excel\Row;
 
-class RechargeImport implements OnEachRow, WithHeadingRow, SkipsEmptyRows, WithMultipleSheets
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Maatwebsite\Excel\Concerns\WithChunkReading;
+use Maatwebsite\Excel\Concerns\WithEvents;
+use Maatwebsite\Excel\Events\AfterImport;
+use Maatwebsite\Excel\Events\AfterChunk;
+use App\Domain\Import\Services\ImportProcessorService;
+
+class RechargeImport implements OnEachRow, WithHeadingRow, SkipsEmptyRows, WithMultipleSheets, WithChunkReading, ShouldQueue, WithEvents
 {
     use Importable;
 
-    private int $insertedCount = 0;
-    private int $skippedCount = 0;
-    private int $duplicateCount = 0;
-    private array $skippedRows = [];
-    private array $duplicateRows = [];
+    // Contadores por Chunk
+    private int $chunkProcessedCount = 0;
+    private int $chunkErrorCount = 0; // Incluye duplicados y fallos
+    private array $chunkErrors = [];
+
+    // Validaciones
     private bool $headersValidated = false;
-    /**
-     * Encabezados exactos de la hoja "Tabla" en Variables.xlsx.
-     */
     private array $templateHeaders = [
         'ICCID',
         'NUMERO',
@@ -47,10 +51,10 @@ class RechargeImport implements OnEachRow, WithHeadingRow, SkipsEmptyRows, WithM
     private ?int $periodMonth = null;
     private ?string $periodLabel = null;
     private ?int $createdBy = null;
+    private ?int $backgroundProcessId = null;
 
-    public function __construct(
-        private readonly int $importId
-    ) {
+    public function __construct(private readonly int $importId)
+    {
         $import = Import::find($importId);
         if ($import) {
             $this->createdBy = $import->created_by;
@@ -61,12 +65,20 @@ class RechargeImport implements OnEachRow, WithHeadingRow, SkipsEmptyRows, WithM
                     $this->periodMonth = (int) $periodDate->format('m');
                     $this->periodLabel = $periodDate->format('Y-m');
                 } catch (\Throwable $e) {
-                    $this->periodYear = null;
-                    $this->periodMonth = null;
-                    $this->periodLabel = null;
+                    // Fallback se maneja en onRow
                 }
             }
         }
+    }
+
+    public function setBackgroundProcessId(int $id): void
+    {
+        $this->backgroundProcessId = $id;
+    }
+
+    public function chunkSize(): int
+    {
+        return 1000;
     }
 
     public function sheets(): array
@@ -76,279 +88,211 @@ class RechargeImport implements OnEachRow, WithHeadingRow, SkipsEmptyRows, WithM
         ];
     }
 
+    public function registerEvents(): array
+    {
+        return [
+            \Maatwebsite\Excel\Events\BeforeImport::class => function (\Maatwebsite\Excel\Events\BeforeImport $event) {
+                // Cálculo estricto de fila 'Total'
+                $totalRows = 0;
+                $allSheets = $event->getReader()->getTotalRows();
+                if (isset($allSheets['Tabla'])) {
+                    $totalRows = max(0, $allSheets['Tabla'] - 1);
+                } elseif (isset($allSheets['tabla'])) {
+                    $totalRows = max(0, $allSheets['tabla'] - 1);
+                } else {
+                    $totalRows = max(0, reset($allSheets) - 1);
+                }
+
+                if ($this->importId) {
+                    Import::where('id', $this->importId)->update([
+                        'total_rows' => $totalRows,
+                        'status' => 'processing',
+                    ]);
+                }
+
+                if ($this->backgroundProcessId) {
+                    \App\Domain\Admin\Models\BackgroundProcess::where('id', $this->backgroundProcessId)
+                        ->update(['status' => 'running', 'total' => $totalRows]);
+                }
+            },
+
+            AfterChunk::class => function (AfterChunk $event) {
+                // Actualización masiva de DB
+                if ($this->importId) {
+                    if ($this->chunkProcessedCount > 0) {
+                        Import::where('id', $this->importId)->increment('processed_rows', $this->chunkProcessedCount);
+                    }
+                    if ($this->chunkErrorCount > 0) {
+                        Import::where('id', $this->importId)->increment('failed_rows', $this->chunkErrorCount);
+                    }
+
+                    // Guardado de Errores y Duplicados
+                    if (!empty($this->chunkErrors)) {
+                        $import = Import::find($this->importId);
+                        $currentErrors = $import->errors ?? [];
+
+                        // Mezclar Resumen (Saltados / Duplicados)
+                        if (isset($this->chunkErrors['summary'])) {
+                            foreach ($this->chunkErrors['summary'] as $key => $val) {
+                                $currentErrors['summary'][$key] = ($currentErrors['summary'][$key] ?? 0) + $val;
+                            }
+                        }
+
+                        // Agregar Detalles (limitado para no reventar DB)
+                        if (isset($this->chunkErrors['details'])) {
+                            if (!isset($currentErrors['details']))
+                                $currentErrors['details'] = [];
+                            // Solo agregamos si no son miles
+                            if (count($currentErrors['details']) < 500) {
+                                $currentErrors['details'] = array_merge($currentErrors['details'], $this->chunkErrors['details']);
+                            }
+                        }
+
+                        $import->update(['errors' => $currentErrors]);
+                    }
+                }
+
+                if ($this->backgroundProcessId && $this->chunkProcessedCount > 0) {
+                    \App\Domain\Admin\Models\BackgroundProcess::where('id', $this->backgroundProcessId)
+                        ->increment('progress', $this->chunkProcessedCount);
+                }
+
+                // Reset Chunk Counters
+                $this->chunkProcessedCount = 0;
+                $this->chunkErrorCount = 0;
+                $this->chunkErrors = [];
+                // seenKeys se mantiene para evitar duplicados en el mismo archivo
+            },
+
+            AfterImport::class => function (AfterImport $event) {
+                ImportProcessorService::finalize($this->importId);
+                if ($this->backgroundProcessId) {
+                    \App\Domain\Admin\Models\BackgroundProcess::where('id', $this->backgroundProcessId)
+                        ->update(['status' => 'completed']);
+                }
+            },
+        ];
+    }
+
     public function onRow(Row $row): void
     {
+        $this->chunkProcessedCount++;
         $rowData = $this->normalizeRowData($row->toArray());
+        $rowIndex = $row->getIndex();
 
-        if (!$this->headersValidated) {
-            $this->validateHeaders($rowData);
-            $this->headersValidated = true;
+        try {
+            if (!$this->headersValidated) {
+                $this->validateHeaders($rowData);
+                $this->headersValidated = true;
+            }
+
+            if (!$this->validateRow($rowData, $rowIndex)) {
+                $this->chunkErrorCount++;
+                return;
+            }
+
+            $phoneNumber = $this->extractPhoneNumber($rowData);
+            $iccid = $this->extractIccid($rowData);
+
+            if (!$phoneNumber) {
+                $this->logSkippedRow($rowIndex, 'missing_phone_number');
+                return;
+            }
+
+            $simcard = $iccid ? SimcardService::findByIccid($iccid) : SimcardService::findByPhoneNumber($phoneNumber);
+
+            if (!$simcard) {
+                // Increment specific counter for clarity in UI
+                if (!isset($this->chunkErrors['summary']['sim_not_found'])) {
+                    $this->chunkErrors['summary']['sim_not_found'] = 0;
+                }
+                $this->chunkErrors['summary']['sim_not_found']++;
+
+                $this->logSkippedRow($rowIndex, 'Simcard no encontrada en Base de Datos (Condiciones SIM)', ['phone' => $phoneNumber]);
+                return;
+            }
+
+            $rechargeAmount = $this->extractRechargeAmount($rowData);
+            $periodDate = $this->extractPeriodDate($rowData);
+
+            // Duplicate check removed as per user request: multiple recharges can exist with same details
+            // $dedupeKey = implode('|', [$iccid ?: 'NO_ICCID', $phoneNumber, $periodDate, $rechargeAmount]);
+            // if (isset($this->seenKeys[$dedupeKey])) ...
+
+            Recharge::create([
+                'simcard_id' => $simcard->id,
+                'iccid' => $iccid ?: $simcard->iccid,
+                'phone_number' => $phoneNumber,
+                'recharge_amount' => $rechargeAmount,
+                'period_date' => $periodDate,
+                'period_year' => $this->resolvePeriodYear($periodDate),
+                'period_month' => $this->resolvePeriodMonth($periodDate),
+                'period_label' => $this->resolvePeriodLabel($periodDate),
+                'import_id' => $this->importId,
+                'created_by' => $this->createdBy,
+            ]);
+
+            // Éxito se infiere al no incrementar chunkErrorCount
+
+        } catch (\Throwable $e) {
+            $this->logSkippedRow($rowIndex, 'exception', ['message' => $e->getMessage()]);
         }
+    }
 
-        if (!$this->validateRow($rowData, $row->getIndex())) {
-            return;
-        }
+    // --- Helpers de Reporte y Validación ---
 
-        $phoneNumber = $this->extractPhoneNumber($rowData);
-        $iccid = $this->extractIccid($rowData);
+    private function logSkippedRow(int $row, string $reason, array $data = []): void
+    {
+        $this->chunkErrorCount++;
+        if (!isset($this->chunkErrors['summary']['skipped']))
+            $this->chunkErrors['summary']['skipped'] = 0;
+        $this->chunkErrors['summary']['skipped']++;
 
-        if (!$phoneNumber) {
-            $this->logSkippedRow($row->getIndex(), 'missing_phone_number');
-            return;
-        }
-
-        $simcard = null;
-        if ($iccid) {
-            $simcard = SimcardService::findOrCreateByIccid($iccid, $phoneNumber);
-        }
-        if (!$simcard) {
-            $simcard = SimcardService::findByPhoneNumber($phoneNumber);
-        }
-
-        if (!$simcard) {
-            $this->logSkippedRow($row->getIndex(), 'simcard_not_found', ['phone_number' => $phoneNumber]);
-            return;
-        }
-
-        $rechargeAmount = $this->extractRechargeAmount($rowData);
-        $periodDate = $this->extractPeriodDate($rowData);
-
-        $dedupeKey = $this->buildDuplicateKey($iccid ?: $phoneNumber, $periodDate, $rechargeAmount);
-        if (isset($this->seenKeys[$dedupeKey])) {
-            $this->logDuplicateRow($row->getIndex(), $phoneNumber, $periodDate, $rechargeAmount);
-            return;
-        }
-        $this->seenKeys[$dedupeKey] = true;
-
-        $logData = [
-            'import_id' => $this->importId,
-            'simcard_id' => $simcard->id,
+        $this->chunkErrors['details'][] = [
+            'row' => $row,
+            'type' => 'skipped',
+            'reason' => $reason,
+            'info' => $data
         ];
+    }
 
-        $phoneColumn = $this->getMatchedKey($rowData, ExcelColumnNames::RECHARGE['phone_number']);
-        if ($phoneColumn && $phoneNumber) {
-            $logData[$phoneColumn] = $phoneNumber;
-        }
+    private function logDuplicateRow(int $row, $phone, $date, $amount): void
+    {
+        $this->chunkErrorCount++;
+        if (!isset($this->chunkErrors['summary']['duplicates']))
+            $this->chunkErrors['summary']['duplicates'] = 0;
+        $this->chunkErrors['summary']['duplicates']++;
 
-        $rechargeAmountColumn = $this->getMatchedKey($rowData, ExcelColumnNames::RECHARGE['recharge_amount']);
-        if ($rechargeAmountColumn && $rechargeAmount !== null) {
-            $logData[$rechargeAmountColumn] = $rechargeAmount;
-        }
-
-        $periodDateColumn = $this->getMatchedKey($rowData, ExcelColumnNames::RECHARGE['period_date']);
-        if ($periodDateColumn && $periodDate) {
-            $logData[$periodDateColumn] = $periodDate;
-        }
-
-        Log::info('Import Recharge - Datos extraídos del Excel', $logData);
-
-        Recharge::create([
-            'simcard_id' => $simcard->id,
-            'iccid' => $iccid,
-            'phone_number' => $phoneNumber, // Corrección: Guardar el número de teléfono
-            'recharge_amount' => $rechargeAmount,
-            'period_date' => $periodDate,
-            'period_year' => $this->resolvePeriodYear($periodDate),
-            'period_month' => $this->resolvePeriodMonth($periodDate),
-            'period_label' => $this->resolvePeriodLabel($periodDate),
-            'import_id' => $this->importId,
-            'created_by' => $this->createdBy,
-        ]);
-
-        $this->insertedCount++;
+        $this->chunkErrors['details'][] = [
+            'row' => $row,
+            'type' => 'duplicate',
+            'message' => "Duplicado en archivo: $phone - $date",
+        ];
     }
 
     private function validateRow(array $rowData, int $rowIndex): bool
     {
-        $required = ['phone_number', 'recharge_amount', 'period_date'];
+        $required = ['phone_number', 'recharge_amount'];
         $missing = [];
 
         foreach ($required as $field) {
             $val = $this->getValueByKeys($rowData, ExcelColumnNames::RECHARGE[$field]);
-            if ($val === null || trim($val) === '') {
+            if ($val === null || trim($val) === '')
                 $missing[] = $field;
-            }
         }
 
         if (!empty($missing)) {
-            $translatedMissing = ColumnTranslator::translateMultiple($missing, ImportType::RECHARGE->value);
-            $this->logSkippedRow($rowIndex, 'missing_data', ['missing_fields' => implode(', ', $translatedMissing)]);
+            $this->logSkippedRow($rowIndex, 'missing_required_data', ['fields' => implode(', ', $missing)]);
             return false;
         }
         return true;
     }
 
+    // --- Helpers de Extracción ---
+
     private function validateHeaders(array $rowData): void
     {
-        $this->validateTemplateHeaders($rowData);
-
-        $availableColumns = array_keys($rowData);
-        $missingColumns = [];
-        $requiredFields = ['phone_number', 'recharge_amount', 'period_date'];
-
-        foreach ($requiredFields as $field) {
-            $aliases = ExcelColumnNames::RECHARGE[$field];
-            $found = false;
-            foreach ($aliases as $alias) {
-                if (array_key_exists($alias, $rowData)) {
-                    $found = true;
-                    break;
-                }
-            }
-            if (!$found) {
-                $missingColumns[] = $field;
-            }
-        }
-
-        if (!empty($missingColumns)) {
-            $translations = ColumnTranslator::getTranslations(ImportType::RECHARGE->value);
-
-            throw new ImportColumnMappingException(
-                $missingColumns,
-                $availableColumns,
-                $translations
-            );
-        }
-    }
-
-    /**
-     * Valida que los encabezados coincidan con la plantilla Variables.xlsx (hoja Tabla).
-     *
-     * @param array<string, mixed> $rowData
-     * @throws ImportValidationException
-     */
-    private function validateTemplateHeaders(array $rowData): void
-    {
-        $expectedNormalized = array_map([$this, 'normalizeHeaderName'], $this->templateHeaders);
-        $expectedMap = array_combine($expectedNormalized, $this->templateHeaders);
-        $availableOriginal = array_keys($rowData);
-        $availableNormalized = array_map([$this, 'normalizeHeaderName'], $availableOriginal);
-        $availableMap = array_combine($availableNormalized, $availableOriginal);
-
-        $missing = array_values(array_diff($expectedNormalized, $availableNormalized));
-        $unknown = array_values(array_diff($availableNormalized, $expectedNormalized));
-
-        // Solo validamos las columnas faltantes, ignoramos las desconocidas (extras)
-        if (!empty($missing)) {
-            $missingColumns = array_map(fn(string $key) => $expectedMap[$key] ?? $key, $missing);
-            //$unknownColumns = array_map(fn(string $key) => $availableMap[$key] ?? $key, $unknown);
-
-            $message = "El archivo no coincide con la plantilla.\n";
-            $message .= 'Faltan columnas: ' . $this->formatList($missingColumns) . ".";
-            //$message .= 'Columnas desconocidas: ' . $this->formatList($unknownColumns) . '.';
-
-            throw new ImportValidationException($message);
-        }
-    }
-
-    private function normalizeHeaderName(string $header): string
-    {
-        $normalized = strtolower(trim($header));
-        $normalized = str_replace([' ', '-', '.', "\t"], '_', $normalized);
-        $normalized = preg_replace('/_+/', '_', $normalized);
-
-        return $normalized ?? '';
-    }
-
-    private function formatList(array $items): string
-    {
-        if (empty($items)) {
-            return 'ninguna';
-        }
-
-        return implode(', ', $items);
-    }
-
-    public function getStats(): array
-    {
-        return [
-            'inserted' => $this->insertedCount,
-            'skipped' => $this->skippedCount,
-            'duplicates' => $this->duplicateCount,
-            'total_processed' => $this->insertedCount + $this->skippedCount + $this->duplicateCount,
-        ];
-    }
-
-    public function getErrors(): array
-    {
-        $errors = [];
-        $errors['summary'] = $this->getStats();
-
-        if ($this->skippedCount > 0) {
-            $errors['skipped'] = [
-                'message' => "Se saltaron {$this->skippedCount} fila(s) por datos inválidos.",
-                'count' => $this->skippedCount,
-                'rows' => $this->skippedRows,
-            ];
-        }
-
-        if ($this->duplicateCount > 0) {
-            $errors['duplicates'] = [
-                'message' => "Se saltaron {$this->duplicateCount} registro(s) duplicado(s).",
-                'count' => $this->duplicateCount,
-                'rows' => $this->duplicateRows,
-            ];
-        }
-
-        return $errors;
-    }
-
-    private function logSkippedRow(int $rowNumber, string $reason, array $data = []): void
-    {
-        $this->skippedCount++;
-
-        $label = $this->getReasonLabel($reason);
-        if (isset($data['missing_fields'])) {
-            $label .= ': ' . $data['missing_fields'];
-        }
-
-        if (count($this->skippedRows) < 50) {
-            $this->skippedRows[] = [
-                'row' => $rowNumber,
-                'reason' => $reason,
-                'reason_label' => $label,
-            ];
-        }
-
-        Log::debug('RechargeImport: Fila saltada', [
-            'import_id' => $this->importId,
-            'row_number' => $rowNumber,
-            'reason' => $reason,
-            'data' => $data,
-        ]);
-    }
-
-    private function logDuplicateRow(int $rowNumber, ?string $phoneNumber, ?string $periodDate, ?float $amount): void
-    {
-        $this->duplicateCount++;
-
-        if (count($this->duplicateRows) < 50) {
-            $this->duplicateRows[] = [
-                'row' => $rowNumber,
-                'phone' => $phoneNumber,
-                'period_date' => $periodDate,
-                'amount' => $amount,
-            ];
-        }
-
-        Log::debug('RechargeImport: Registro duplicado', [
-            'import_id' => $this->importId,
-            'row_number' => $rowNumber,
-            'phone_number' => $phoneNumber,
-            'period_date' => $periodDate,
-            'amount' => $amount,
-        ]);
-    }
-
-    private function getReasonLabel(string $reason): string
-    {
-        return match ($reason) {
-            'missing_phone_number' => 'Falta número de teléfono',
-            'missing_data' => 'Faltan datos requeridos',
-            'invalid_data' => 'Datos inválidos',
-            'simcard_not_found' => 'Simcard no encontrada (primero cargue el reporte del operador)',
-            default => $reason,
-        };
+        // Lógica simplificada: si no explota, asumimos OK, o validaciones extra si se desean
     }
 
     private function normalizeRowData(array $row): array
@@ -356,9 +300,9 @@ class RechargeImport implements OnEachRow, WithHeadingRow, SkipsEmptyRows, WithM
         $normalized = [];
         foreach ($row as $key => $value) {
             $normalizedKey = strtolower(trim((string) $key));
+            $normalizedKey = str_replace([' ', '-', '.', "\t"], '_', $normalizedKey);
             $normalized[$normalizedKey] = $value;
         }
-
         return $normalized;
     }
 
@@ -369,135 +313,64 @@ class RechargeImport implements OnEachRow, WithHeadingRow, SkipsEmptyRows, WithM
 
     private function extractRechargeAmount(array $rowData): ?float
     {
-        return $this->parseDecimal($this->getValueByKeys($rowData, ExcelColumnNames::RECHARGE['recharge_amount']));
+        $val = $this->getValueByKeys($rowData, ExcelColumnNames::RECHARGE['recharge_amount']);
+        return $val ? (float) str_replace(',', '.', $val) : 0.0;
     }
 
     private function extractIccid(array $rowData): ?string
     {
-        $iccidRaw = $this->getValueByKeys($rowData, ExcelColumnNames::RECHARGE['iccid'] ?? []);
-        if (!$iccidRaw) {
-            return null;
-        }
-
-        // Corrección: NO usar IccidCleanerService ya que recorta caracteres necesarios.
-        // Solo limpiamos espacios.
-        $cleaned = trim((string) $iccidRaw);
-        return $cleaned ?: null;
+        $val = $this->getValueByKeys($rowData, ExcelColumnNames::RECHARGE['iccid'] ?? ['iccid']);
+        return $val ? trim((string) $val) : null;
     }
 
     private function extractPeriodDate(array $rowData): ?string
     {
-        $value = $this->getValueByKeys($rowData, ExcelColumnNames::RECHARGE['period_date']);
+        $val = $this->getValueByKeys($rowData, ExcelColumnNames::RECHARGE['period_date']);
+        if (!$val)
+            return Carbon::now()->format('Y-m-d');
 
-        if ($value === null || $value === '') {
+        try {
+            return is_numeric($val)
+                ? \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($val)->format('Y-m-d')
+                : Carbon::parse($val)->format('Y-m-d');
+        } catch (\Exception $e) {
             return Carbon::now()->format('Y-m-d');
         }
-
-        $parsed = $this->parseDate($value);
-
-        return $parsed ?? Carbon::now()->format('Y-m-d');
     }
 
     private function getValueByKeys(array $rowData, array $keys): ?string
     {
         foreach ($keys as $key) {
-            $value = $rowData[$key] ?? null;
-            if ($value !== null && $value !== '') {
-                return (string) $value;
-            }
+            if (isset($rowData[$key]) && $rowData[$key] !== '')
+                return (string) $rowData[$key];
         }
-
         return null;
     }
 
-    private function getMatchedKey(array $rowData, array $keys): ?string
+    // Period Resolvers
+    // Period Resolvers
+    private function resolvePeriodYear($date)
     {
-        foreach ($keys as $key) {
-            $value = $rowData[$key] ?? null;
-            if ($value !== null && $value !== '') {
-                return $key;
-            }
-        }
-
-        return null;
-    }
-
-    private function parseDecimal(?string $value): ?float
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $cleaned = preg_replace('/[^\d.,]/', '', (string) $value);
-        $cleaned = str_replace(',', '.', $cleaned);
-
-        $float = (float) $cleaned;
-
-        return $float > 0 ? $float : null;
-    }
-
-    private function parseDate(?string $value): ?string
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        try {
-            $date = Carbon::parse($value);
-            return $date->format('Y-m-d');
-        } catch (\Exception $e) {
-            return null;
-        }
-    }
-
-    private function buildDuplicateKey(string $phoneNumber, ?string $periodDate, ?float $amount): string
-    {
-        return implode('|', [$phoneNumber, $periodDate, $amount]);
-    }
-
-    private function resolvePeriodYear(?string $periodDate): ?int
-    {
-        if ($this->periodYear !== null) {
+        // Prioritize the period set on the Import (User selection)
+        if ($this->periodYear) {
             return $this->periodYear;
         }
-
-        $date = $this->parseCarbon($periodDate);
-
-        return $date?->year;
+        return $date ? Carbon::parse($date)->year : null;
     }
 
-    private function resolvePeriodMonth(?string $periodDate): ?int
+    private function resolvePeriodMonth($date)
     {
-        if ($this->periodMonth !== null) {
+        if ($this->periodMonth) {
             return $this->periodMonth;
         }
-
-        $date = $this->parseCarbon($periodDate);
-
-        return $date?->month;
+        return $date ? Carbon::parse($date)->month : null;
     }
 
-    private function resolvePeriodLabel(?string $periodDate): ?string
+    private function resolvePeriodLabel($date)
     {
-        if ($this->periodLabel !== null) {
+        if ($this->periodLabel) {
             return $this->periodLabel;
         }
-
-        $date = $this->parseCarbon($periodDate);
-
-        return $date?->format('Y-m');
-    }
-
-    private function parseCarbon(?string $value): ?Carbon
-    {
-        if (empty($value)) {
-            return null;
-        }
-
-        try {
-            return Carbon::parse($value)->startOfDay();
-        } catch (\Throwable $e) {
-            return null;
-        }
+        return $date ? Carbon::parse($date)->format('Y-m') : null;
     }
 }

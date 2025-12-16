@@ -1,5 +1,7 @@
 @php
-    $conflicts = $getState() ?? [];
+    $record = $getRecord();
+    $errors = $record->errors ?? [];
+    $conflicts = $errors['conflicts'] ?? $getState() ?? [];
     $hasPending = collect($conflicts)->contains(fn($c) => ($c['status'] ?? 'pending') !== 'resolved');
 @endphp
 

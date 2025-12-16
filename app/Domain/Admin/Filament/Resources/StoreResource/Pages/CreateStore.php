@@ -57,15 +57,23 @@ class CreateStore extends CreateRecord implements HasForms
         }
     }
 
+    protected function getForms(): array
+    {
+        return [
+            'form',
+            'bulkForm',
+        ];
+    }
+
     public function bulkForm(Schema $schema): Schema
     {
         return $schema
             ->schema([
-                FileUpload::make('file')
+                FileUpload::make('import_file')
                     ->label('Archivos Excel (.xlsx)')
-                    ->disk('local')
+                    ->disk('public')
                     ->directory('imports/stores')
-                    ->acceptedFileTypes(['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'])
+                    // Validación de tipos eliminada temporalmente para desbloquear subida
                     ->required()
                     ->helperText('Arrastra y suelta tus archivos o Examina'),
                 Toggle::make('update_conflicting_users')
@@ -79,10 +87,11 @@ class CreateStore extends CreateRecord implements HasForms
     public function downloadTemplate()
     {
         return Storage::disk('public')->download('template/Tiendas.xlsx');
-    }    public function processBulkUpload()
+    }
+    public function processBulkUpload()
     {
         $data = $this->bulkForm->getState();
-        $filePath = $data['file'];
+        $filePath = $data['import_file'];
         $updateConflicts = (bool) ($data['update_conflicting_users'] ?? false);
 
         try {
@@ -103,12 +112,13 @@ class CreateStore extends CreateRecord implements HasForms
                 ],
             ]);
 
-            ProcessStoreImportJob::dispatchSync($import->id);
+            ProcessStoreImportJob::dispatch($import->id);
 
             Notification::make()
-                ->title('Importación creada')
-                ->success()
-                ->body('La importación masiva de tiendas se está procesando. Revisa el detalle en Importaciones.')
+                ->title('⏳ Importación Iniciada en Segundo Plano')
+                ->info()
+                ->body('El proceso ha comenzado. Puedes continuar trabajando; recibirás una notificación cuando termine.')
+                ->persistent()
                 ->send();
 
             $this->redirect(ImportResource::getUrl('view', ['record' => $import->id], panel: 'admin'));

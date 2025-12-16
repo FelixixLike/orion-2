@@ -142,6 +142,7 @@ class ImportResource extends Resource
                         'failed' => 'danger',
                         default => 'gray',
                     })
+                    // ... (status column)
                     ->formatStateUsing(fn(string $state): string => match ($state) {
                         'pending' => 'Pendiente',
                         'processing' => 'Procesando',
@@ -150,6 +151,23 @@ class ImportResource extends Resource
                         default => $state,
                     })
                     ->sortable(),
+
+                \Filament\Tables\Columns\TextColumn::make('progress')
+                    ->label('Progreso')
+                    ->state(function (Import $record): string {
+                        if ($record->status === 'pending') {
+                            return '-';
+                        }
+                        return number_format($record->processed_rows ?? 0) . ' / ' . number_format($record->total_rows ?? 0);
+                    })
+                    ->badge()
+                    ->color(fn(Import $record): string => match ($record->status) {
+                        'processing' => 'info',
+                        'completed' => 'success',
+                        'failed' => 'danger',
+                        default => 'gray',
+                    }),
+
 
                 \Filament\Tables\Columns\TextColumn::make('created_at')
                     ->label('Creado')

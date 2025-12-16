@@ -51,8 +51,12 @@
             </div>
             <div class="mt-4">
                 <p class="text-sm text-gray-600">Tiendas liquidadas:
-                    <strong>{{ $summary['stores_count'] ?? 0 }}</strong></p>
+                    <strong>{{ $summary['stores_count'] ?? 0 }}</strong>
+                </p>
             </div>
         </x-filament::card>
+
+
+
     </div>
 </x-filament-panels::page>

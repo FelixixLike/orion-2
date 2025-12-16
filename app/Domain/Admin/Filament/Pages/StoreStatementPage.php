@@ -160,7 +160,7 @@ class StoreStatementPage extends Page
 
         $periodQuery = (clone $baseQuery)->whereBetween('movement_date', [$start, $end]);
 
-        if (! (clone $periodQuery)->exists()) {
+        if (!(clone $periodQuery)->exists()) {
             $this->buildLegacyStatement($start, $end, $store, $storeLabel);
             return;
         }
@@ -231,7 +231,7 @@ class StoreStatementPage extends Page
             ->distinct()
             ->orderByDesc('period')
             ->pluck('period')
-            ->filter(fn ($value) => ! empty($value))
+            ->filter(fn($value) => !empty($value))
             ->values()
             ->toArray();
 
@@ -239,7 +239,7 @@ class StoreStatementPage extends Page
 
         $this->periodOptions = collect($balancePeriods)
             ->merge($legacyPeriods)
-            ->filter(fn ($value) => ! empty($value))
+            ->filter(fn($value) => !empty($value))
             ->unique()
             ->sortDesc()
             ->values()
@@ -323,7 +323,7 @@ class StoreStatementPage extends Page
             ->selectRaw("date_trunc('month', requested_at) as period_month")
             ->distinct()
             ->pluck('period_month')
-            ->map(fn ($value) => $value ? Carbon::parse($value)->format('Y-m') : null)
+            ->map(fn($value) => $value ? Carbon::parse($value)->format('Y-m') : null)
             ->filter();
 
         return $liquidationPeriods

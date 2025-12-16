@@ -5,8 +5,9 @@ namespace App\Domain\Admin\Filament\Resources;
 use App\Domain\Admin\Filament\Resources\StoreResource\Pages;
 use App\Domain\Retailer\Support\BalanceService;
 use App\Domain\Route\Models\Route as SalesRoute;
-use App\Domain\Store\Enums\Municipality;
-use App\Domain\Store\Enums\StoreCategory;
+use App\Domain\Store\Models\Municipality;
+use Illuminate\Support\Str;
+use App\Domain\Store\Models\StoreCategory;
 use App\Domain\Store\Enums\StoreStatus;
 use App\Domain\Store\Models\Store;
 use App\Domain\User\Models\User;
@@ -114,7 +115,36 @@ class StoreResource extends Resource
 
                     Select::make('category')
                         ->label('Categoría')
-                        ->options(StoreCategory::options())
+                        ->searchable()
+                        ->preload()
+                        ->options(fn() => StoreCategory::query()->orderBy('name')->pluck('name', 'name')->toArray())
+                        ->createOptionForm([
+                            TextInput::make('name')
+                                ->label('Nombre de Categoría')
+                                ->required()
+                                ->maxLength(255)
+                                ->unique('store_categories', 'name'),
+                            Select::make('color')
+                                ->label('Color')
+                                ->options([
+                                    'primary' => 'Azul (Primary)',
+                                    'secondary' => 'Gris (Secondary)',
+                                    'success' => 'Verde (Success)',
+                                    'warning' => 'Amarillo (Warning)',
+                                    'danger' => 'Rojo (Danger)',
+                                    'info' => 'Celeste (Info)',
+                                    'gray' => 'Gris (Gray)',
+                                ])
+                                ->default('gray'),
+                        ])
+                        ->createOptionUsing(function (array $data) {
+                            $cat = StoreCategory::create([
+                                'name' => $data['name'],
+                                'slug' => Str::slug($data['name']),
+                                'color' => $data['color'] ?? 'gray'
+                            ]);
+                            return $cat->name;
+                        })
                         ->nullable(),
                 ])
                 ->columns(2),
@@ -327,7 +357,20 @@ class StoreResource extends Resource
 
                     Select::make('municipality')
                         ->label('Municipio')
-                        ->options(Municipality::metaOptions())
+                        ->searchable()
+                        ->preload()
+                        ->options(fn() => Municipality::query()->orderBy('name')->pluck('name', 'name')->toArray())
+                        ->createOptionForm([
+                            TextInput::make('name')
+                                ->label('Nombre del municipio')
+                                ->required()
+                                ->maxLength(255)
+                                ->unique('municipalities', 'name'),
+                        ])
+                        ->createOptionUsing(function (array $data) {
+                            $muni = Municipality::create(['name' => $data['name'], 'slug' => Str::slug($data['name'])]);
+                            return $muni->name;
+                        })
                         ->nullable(),
 
                     TextInput::make('neighborhood')
@@ -422,13 +465,12 @@ class StoreResource extends Resource
                 TextColumn::make('category')
                     ->label('Categoría')
                     ->badge()
-                    ->formatStateUsing(fn($state) => $state instanceof StoreCategory ? $state->label() : (StoreCategory::tryFrom($state)?->label() ?? $state))
-                    ->colors(StoreCategory::badgeColors())
+                    ->colors(fn() => StoreCategory::pluck('color', 'name')->toArray())
                     ->sortable(),
 
                 TextColumn::make('municipality')
                     ->label('Municipio')
-                    ->formatStateUsing(fn($state) => $state instanceof Municipality ? $state->label() : (Municipality::tryFrom($state)?->label() ?? $state))
+                    ->searchable()
                     ->sortable(),
 
                 TextColumn::make('status')
@@ -469,11 +511,11 @@ class StoreResource extends Resource
 
                 SelectFilter::make('category')
                     ->label('Categoría')
-                    ->options(StoreCategory::options()),
+                    ->options(fn() => StoreCategory::query()->orderBy('name')->pluck('name', 'name')->toArray()),
 
                 SelectFilter::make('municipality')
                     ->label('Municipio')
-                    ->options(Municipality::options()),
+                    ->options(fn() => Municipality::query()->orderBy('name')->pluck('name', 'name')->toArray()),
 
                 SelectFilter::make('route_code')
                     ->label('Ruta')

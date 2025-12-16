@@ -49,10 +49,15 @@ if [ ! -f vendor/autoload.php ]; then
     done
     if [ ! -f vendor/autoload.php ] && command -v composer >/dev/null 2>&1; then
         echo "Intento final de composer install como root..."
-        composer install --no-interaction --prefer-dist --optimize-autoloader --no-progress || echo "Composer install falló."
+        composer install --no-interaction --prefer-dist --optimize-autoloader --no-progress || { echo "Composer install falló FATALMENTE. Abortando."; exit 1; }
     fi
     chown -R www-data:www-data vendor 2>/dev/null || true
-fi
+    
+    # Verificación final
+    if [ ! -f vendor/autoload.php ]; then
+         echo "Error: vendor/autoload.php no encontrado tras instalación. Abortando."
+         exit 1
+    fi
 
 if [ -f package.json ] && [ ! -d node_modules ]; then
     if command -v npm >/dev/null 2>&1; then

@@ -30,6 +30,8 @@ class ConditionsSimListPage extends Page implements HasTable
 
     protected static bool $shouldRegisterNavigation = false;
 
+    protected static ?string $title = 'Listado de Condiciones SIM';
+
     protected string $view = 'filament.admin.conditions-simcard.conditions-list';
 
     public static function getSlug(?\Filament\Panel $panel = null): string
@@ -349,19 +351,20 @@ class ConditionsSimListPage extends Page implements HasTable
         $records = $this->getFilteredTableQuery()->get();
 
         // Create filename with timestamp
-        $filename = 'condiciones_sim_' . now()->format('Y-m-d_His') . '.xlsx';
+        $filename = 'condiciones_sim_' . now()->format('Y-m-d_His') . '.csv';
 
         // Show notification
         Notification::make()
             ->success()
             ->title('Exportación exitosa')
-            ->body("Se exportaron {$records->count()} registros a Excel")
+            ->body("Se exportaron {$records->count()} registros a CSV")
             ->send();
 
         // Return the download response
         return Excel::download(
             new SalesConditionsExport($records),
-            $filename
+            $filename,
+            \Maatwebsite\Excel\Excel::CSV
         );
     }
 }
