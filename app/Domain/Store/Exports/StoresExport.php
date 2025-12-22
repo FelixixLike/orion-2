@@ -11,23 +11,22 @@ use App\Domain\Store\Enums\StoreCategory;
 use App\Domain\Store\Enums\StoreStatus;
 use App\Domain\Store\Models\Store;
 use Illuminate\Database\Eloquent\Builder;
-use Maatwebsite\Excel\Concerns\FromCollection;
+use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\WithMapping;
 
-class StoresExport implements FromCollection, WithHeadings, WithMapping
+class StoresExport implements FromQuery, WithHeadings, WithMapping
 {
     public function __construct(
         private readonly Builder $query,
     ) {
     }
 
-    public function collection()
+    public function query()
     {
         return $this->query
-            ->with('tenderer')
-            ->orderBy('idpos')
-            ->get();
+            ->with(['tenderer', 'users']) // Optimized eager loading
+            ->orderBy('idpos');
     }
 
     public function headings(): array

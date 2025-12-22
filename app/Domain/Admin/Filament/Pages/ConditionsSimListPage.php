@@ -351,22 +351,15 @@ class ConditionsSimListPage extends Page implements HasTable
 
     public function exportToExcel()
     {
-        // Get all records from the current table query (respects filters and search)
-        $records = $this->getFilteredTableQuery()->get();
+        // Get query builder (respects filters and search)
+        $query = $this->getFilteredTableQuery();
 
         // Create filename with timestamp
         $filename = 'condiciones_sim_' . now()->format('Y-m-d_His') . '.csv';
 
-        // Show notification
-        Notification::make()
-            ->success()
-            ->title('Exportación exitosa')
-            ->body("Se exportaron {$records->count()} registros a CSV")
-            ->send();
-
-        // Return the download response
+        // Return the download response with streaming
         return Excel::download(
-            new SalesConditionsExport($records),
+            new SalesConditionsExport($query),
             $filename,
             \Maatwebsite\Excel\Excel::CSV
         );

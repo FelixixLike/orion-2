@@ -81,9 +81,9 @@ class CreateStore extends CreateRecord implements HasForms
                     ->required()
                     ->helperText('Arrastra y suelta tus archivos o Examina'),
                 Toggle::make('update_conflicting_users')
-                    ->label('Si la cÃ©dula existe pero difiere nombre/correo, actualizar datos del tendero')
+                    ->label('Si la cédula existe pero difiere nombre/correo, actualizar datos del tendero')
                     ->default(false)
-                    ->helperText('Si estÃ¡ apagado, deja la tienda inactiva y registra el conflicto.'),
+                    ->helperText('Si está apagado, deja la tienda inactiva y registra el conflicto.'),
             ])
             ->statePath('bulkData');
     }
@@ -147,7 +147,7 @@ class CreateStore extends CreateRecord implements HasForms
     }
 
     /**
-     * NotificaciÃ³n de conflicto con acciones inmediatas.
+     * Notificación de conflicto con acciones inmediatas.
      */
     protected function notifyConflict(array $error): void
     {
@@ -189,7 +189,7 @@ class CreateStore extends CreateRecord implements HasForms
         if ($action === 'omit') {
             Notification::make()
                 ->title('Omitido')
-                ->body('Se dejÃ³ sin cambios.')
+                ->body('Se dejó sin cambios.')
                 ->send();
             return;
         }
@@ -206,7 +206,7 @@ class CreateStore extends CreateRecord implements HasForms
                     Notification::make()
                         ->title('No aplicado')
                         ->warning()
-                        ->body('Tipo de conflicto no soportado para acciÃ³n automÃ¡tica.')
+                        ->body('Tipo de conflicto no soportado para acción automática.')
                         ->send();
                     return;
             }
@@ -214,7 +214,7 @@ class CreateStore extends CreateRecord implements HasForms
             Notification::make()
                 ->title('Aplicado')
                 ->success()
-                ->body('Se actualizaron los datos segÃºn tu elecciÃ³n.')
+                ->body('Se actualizaron los datos según tu elección.')
                 ->send();
         } catch (\Throwable $e) {
             Notification::make()

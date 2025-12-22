@@ -6,17 +6,17 @@
  */
 namespace App\Domain\Admin\Exports;
 
-use Maatwebsite\Excel\Concerns\FromCollection;
+use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithStyles;
 use Maatwebsite\Excel\Concerns\WithMapping;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
-use Illuminate\Support\Collection;
+use Illuminate\Database\Eloquent\Builder;
 
-class SalesConditionsExport implements FromCollection, WithHeadings, ShouldAutoSize, WithStyles, WithMapping
+class SalesConditionsExport implements FromQuery, WithHeadings, ShouldAutoSize, WithStyles, WithMapping
 {
-    public function __construct(protected Collection $salesConditions)
+    public function __construct(protected Builder $query)
     {
     }
 
@@ -34,9 +34,9 @@ class SalesConditionsExport implements FromCollection, WithHeadings, ShouldAutoS
         ];
     }
 
-    public function collection(): Collection
+    public function query()
     {
-        return $this->salesConditions;
+        return $this->query;
     }
 
     public function map($salesCondition): array
